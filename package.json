@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "@google/genai": "^1.44.0",
+    "apify-client": "^2.22.2",
+    "dotenv": "^17.3.1"
+  }
+}

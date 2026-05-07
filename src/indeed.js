@@ -1,79 +1,87 @@
-import { ApifyClient } from 'apify-client';
-import "dotenv/config"
-import { APIFY_API_KEY, MAX_RPM, COOLDOWN_MS } from './const.js';
-
-const client = new ApifyClient({
-    token: `${APIFY_API_KEY}`,
-});
-
-const jrSWE1day = {
-    "country": "us",
-    "query": "junior software engineer",
-    "location": "California",
-    "maxRows": 50,
-    "sort": "date",
-    "fromDays": "1",
-    "maxRowsPerUrl": 3,
-    "enableUniqueJobs": true,
-    "includeSimilarJobs": true
-};
-
-const jrSWE2day = {
-    "country": "us",
-    "query": "junior software engineer",
-    "location": "California",
-    "maxRows": 100,
-    "sort": "date",
-    "fromDays": "2",
-    "maxRowsPerUrl": 3,
-    "enableUniqueJobs": true,
-    "includeSimilarJobs": true
-};
-
+import { MAX_RPM, COOLDOWN_MS, urlQuery, client, DAYS_POSTED } from './const.js';
+import fs from 'fs'
 import { shouldIApply } from './gemini.js';
-import savedData from './data/mock.json' with { type: 'json' }
+import { exit } from 'process';
 
-function printCompletedJobs(jobs) {
-    const size = jobs.length
-
-    console.clear()
-    console.log(size ? "Current jobs analyzed!\n" : "No results yet!\n")
-    for (let i = size - 1; i >= 0; i--) {
-        console.log(`match score? ${jobs[i].match_score}\n`)
-        console.log(`apply? ${jobs[i].worth_applying ? "YES" : "NO"}` + `        YOE: ${jobs[i].yoe_logic}\n`)
-        console.log(`role type? ${jobs[i].role_type}\n`)
-        console.log(`reason?: ${jobs[i].reason}\n`)
-        console.log("\n-----------------------------------------\n")
+function scoreColor(score, text) {
+    if (score >= 8) {
+        return 'green'
+    }
+    else if (score >= 5) {
+        return 'yellow'
+    } else {
+        return 'red'
     }
 }
 
+import savedData from './data/mock_data.json' with { type: 'json' }
 (async () => {
-    // const scrapMethod = jrSWE2day
-    // const run = await client.actor("MXLpngmVpE8WTESQr").call(scrapMethod);
+
+    
+    // const run = await client.actor("MXLpngmVpE8WTESQr").call(urlQuery);
     // const { items } = await client.dataset(run.defaultDatasetId).listItems();
 
-    let items = savedData.splice(0, 5)
+    // mock data
+    let items = savedData 
 
     let results = []
-    for (const [i, item] of items.entries()) {
+    for (const [i, job] of items.entries()) {
 
         // analyze
-        const jobInfo = "job title: " + item.title + " company name: " + item.companyName + " description: " + item.descriptionText
-        const value = await shouldIApply(jobInfo)  
-        results.push(value)
-        printCompletedJobs(results)
+        const jobInfo = "job title: " + job.title + " company name: " + job.companyName + " description: " + job.descriptionText
 
+        let analysis
+        for (let i = 0; i < 5; i++) {
+            try {
+                analysis = await shouldIApply(jobInfo)  
+                break
+            } catch (err) {
+                await new Promise((resolve) => setTimeout(resolve, 3000))
+                if (i === 4) {
+                    throw err
+                }
+                console.log(`gemini error. retrying. attempt ${i+1} / 5\n`)
+            }
+        }
+
+        results.push( {job, analysis } )
+
+        console.clear()
+        console.log(i + "/" + items.length + " completed")
         await new Promise((resolve) => setTimeout(resolve, COOLDOWN_MS / MAX_RPM))
     };
-
     console.clear()
-    console.log("COMPLETE\n")
-    results.sort((a, b) => b.match_score - a.match_score);
+    console.log("COMPLETED " + items.length + " jobs \n")
+    
+    results.sort((a, b) => b.analysis.score - a.analysis.score);
 
-    results.forEach((item) => {
-        console.log(`Score: ${item.match_score} | Role: ${item.role_type}\n`);
-        console.log(item.yoe_logic + "\n")
-        console.log(item.reason+ "\n");
-        console.log("-------------------\n");
-    });    
+    const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body { font-family: monospace; background: #1e1e1e; color: #ccc; padding: 20px; }
+                .job { border: 1px solid #444; margin-bottom: 20px; padding: 15px; border-radius: 6px; }
+                .score { font-size: 1.5em; font-weight: bold; }
+            </style>
+            <script src="https://cdn.tailwindcss.com"></script>
+        </head>
+        <body>
+        ${results.map(({ job, analysis }) => `
+            <div class="job my-5">
+                <div class="score" style="color:${scoreColor(analysis.score)}">
+                    Score: ${analysis.score}/10 Posted: ${job.age}
+                </div>
+                <p>${job.title}</p>
+                <p>${job.companyName}</p>
+                <div>YOE: ${analysis.yoe}</div>
+                <div style="color:${scoreColor(analysis.score)}">Reason: ${analysis.reason}</div>
+                <a class="text-blue-300 underline" href=${job.jobUrl}>Job Posting<a>
+            </div>
+        `).join('')}
+        </body>
+        </html>
+    `;
+
+    fs.writeFileSync('./index.html', html)
 })(); 

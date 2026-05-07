@@ -1,7 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { SYSTEM_PROMPT } from "./const.js";
 
-// The client gets the API key from the environment variable `GEMINI_API_KEY`.
 const ai = new GoogleGenAI({});
 
 export async function shouldIApply(jobInfo) {

@@ -1,4 +1,5 @@
-import { jobConfig, MAX_RPM, COOLDOWN_MS, client } from './const.js';
+import { job, MAX_RPM, COOLDOWN_MS, client, RESUME_CUTOFF_SCORE } from './config.js';
+import { generateResume } from './resume-generator.js';
 import fs from 'fs'
 import { exit } from 'process';
 import { GoogleGenAI } from "@google/genai";
@@ -25,7 +26,7 @@ async function retryFunction(fn, ...args) {
 
 async function getIndeedJobs() {
     let data  = []
-    const queries = jobConfig.returnQueries()
+    const queries = job.returnQueries()
     for (const query of queries) {
         const run = await client.actor("MXLpngmVpE8WTESQr").call(query)
         const { items } = await client.dataset(run.defaultDatasetId).listItems()
@@ -38,10 +39,10 @@ async function createGeminiFilter() {
     const ai = new GoogleGenAI({});
 
     return async function(jobInfo) {
-        const contents = jobConfig.SYSTEM_PROMPT + " job description: " + jobInfo
+        const contents = job.SYSTEM_PROMPT + " job description: " + jobInfo
 
         const response = await ai.models.generateContent({
-          model: "gemini-3.1-flash-lite-preview",
+          model: "gemini-3.1-flash-lite",
           contents: contents,
           config: {
               responseMimeType: "application/json",
@@ -79,6 +80,17 @@ async function analysisJobs(data) {
     return results   
 }
 
+function generateResumeFiles(results) {
+    for (let i = results.length - 1; i >= 0; i--) {
+        if (results[i].analysis.score < RESUME_CUTOFF_SCORE) {
+            break
+        }
+        const job = results[i].job
+        const jobInfo = "job title: " + job.title + " company name: " + job.companyName + " description: " + job.descriptionText
+        generateResume(jobInfo)
+    }
+}
+
 function createHTMLFile(results) {
     const date = new Date()
     const html = `
@@ -91,6 +103,7 @@ function createHTMLFile(results) {
                 .score { font-size: 1.5em; font-weight: bold; }
             </style>
             <script src="https://cdn.tailwindcss.com"></script>
+            <script src="./resume-tailor.js"></script>
         </head>
         <body>
         <h1 class="font-bold">Search completed: ${date.toLocaleString()}</h1>
@@ -117,7 +130,9 @@ function createHTMLFile(results) {
 async function main() {
     let indeedJobs  = await getIndeedJobs()
     let results = await analysisJobs(indeedJobs)
-    createHTMLFile(results)    
+    // generateResumeFiles()
+    createHTMLFile(results)
+    // generateResume()    
 }
 
 main()

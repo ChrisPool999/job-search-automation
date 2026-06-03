@@ -8,17 +8,23 @@ export const client = new ApifyClient({
     token: process.env.APIFY_API_KEY,
 });
 
-// change job configuration here
-export { SWE as jobConfig } 
-const DAYS_POSTED = "1"
-const MAX_ROWS = 1
+// lowest score that tailored resumes will be generated for (1-10)
+export const RESUME_CUTOFF_SCORE = 7
 
+// job options: { SWE | regularJob | LosAngelesRegular }
+export { LosAngelesRegular as job } 
+
+// search options
+const DAYS_POSTED = "3"
+const MAX_ROWS = 30
+
+// job options
 const SWE = {
     jobQueries : [
         "junior software engineer",
-        // "junior software developer",
+        "junior software developer",
         // "associate software developer",
-        "jr developer"
+        // "jr developer"
     ],
 
     SYSTEM_PROMPT : `
@@ -63,7 +69,7 @@ const SWE = {
     }
 }
 
-const regularJob = {
+const FresnoRegular = {
     jobQueries : [
         "office assistant",
         "data entry",
@@ -100,6 +106,68 @@ const regularJob = {
                 "country": "us",
                 "query": job,
                 "location": "Fresno, CA",
+                "maxRows": MAX_ROWS,
+                "sort": "date",
+                "fromDays": DAYS_POSTED,
+                "enableUniqueJobs": true,
+                "includeSimilarJobs": true            
+            })
+        }
+        return queries
+    }
+}
+
+const LosAngelesRegular = {
+    jobQueries : [
+        "office assistant",
+        "data entry",
+        "IT support",
+        "help desk",
+        "technical support",
+        "receptionist",
+        "administrative assistant",
+        "security guard",
+        "customer success",
+        "operations coordinator",
+        "entry level HR",
+        "HR coordinator",
+        "payroll specialist",
+        "recruiting coordinator",
+        "benefits administrator",
+        "account coordinator",
+        "junior analyst",
+        "business analyst entry level",
+        "project coordinator",
+        "customer success associate"
+    ],
+
+    SYSTEM_PROMPT : `
+        I'm a recent CS grad looking for stable income while pursuing software engineering roles. I have around 1 year general customer service experience.
+        I prefer white-collar roles I can grow in — IT support, help desk, HR, payroll, recruiting, 
+        operations, or any entry-level role where a CS degree is an advantage. The biggest thing you must is give any 
+        job im unqualified for, (basically dont meet job posting requirements) a 0, or basically exclude any I can't apply to 
+        (eg requires 3 years exp, or a degree in healthcare, etc)
+
+        Scoring priority:
+        - High pay ($20+/hr) and career growth potential = 8-10
+        - Easy to get, decent pay ($16-20/hr) = 5-7
+        - Low pay or dead end = 1-4
+        - Requires specialized certifications or years of experience I dont have. = 0
+
+        OUTPUT (valid JSON only, no markdown, no preamble):
+        {
+          "score": number (0 or 1-10),
+          "yoe": "exact years of professional experience the job is asking for.",
+          "reason": "one blunt sentence explaining the score."
+        }`.trim(),
+
+    returnQueries() {
+        let queries = []
+        for (const job of this.jobQueries) {
+            queries.push({
+                "country": "us",
+                "query": job,
+                "location": "Los Angeles County, CA",
                 "maxRows": MAX_ROWS,
                 "sort": "date",
                 "fromDays": DAYS_POSTED,

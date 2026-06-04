@@ -12,11 +12,11 @@ export const client = new ApifyClient({
 export const RESUME_CUTOFF_SCORE = 7
 
 // job options: { SWE | regularJob | LosAngelesRegular }
-export { LosAngelesRegular as job } 
+export { SWE as job } 
 
 // search options
-const DAYS_POSTED = "3"
-const MAX_ROWS = 30
+const DAYS_POSTED = "1"
+const MAX_ROWS = 1
 
 // job options
 const SWE = {

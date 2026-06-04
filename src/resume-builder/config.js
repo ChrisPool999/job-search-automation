@@ -1,70 +1,21 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import { chromium } from 'playwright';
-import { exec } from 'child_process';
+export const buildPrompt = `
+You are tailoring a resume for a specific job posting. Rewrite the resume bullets to match the job description language and requirements, staying truthful to what the candidate actually built.
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const BUILD_DIR = path.resolve(__dirname, '../build');
+RULES:
+- Output HTML only, mirroring the exact structure of the resume HTML given
+- Only change bullet text content, tech stack lines, and the city in the header
+- Do not add or remove entire projects
+- Do not invent skills or experience the candidate does not have
+- Match the job description terminology where honest
+- Keep bullets concise, one to two lines max
+- No filler phrases like "demonstrated ability to" or "showcasing proficiency in"
+- No em dashes
+- Swap the city in the header to match the job location
 
-function sanitizeFilename(value) {
-    return value
-        .replace(/[<>:\"/\\|?*\x00-\x1F]/g, '')
-        .replace(/\s+/g, '-')
-        .replace(/-+/g, '-')
-        .replace(/^-|-$/g, '')
-        .toLowerCase() || 'resume';
-}
+OUTPUT: HTML only, no markdown, no preamble, no explanation.
+`
 
-export async function generateResume(companyName = 'hello-world') {
-    const dateSuffix = new Date().toISOString().slice(0, 10);
-    const outputDir = path.join(BUILD_DIR, `${dateSuffix}-resumes`);
-    fs.mkdirSync(outputDir, { recursive: true });
-
-    const safeName = sanitizeFilename(companyName);
-    const outputPath = path.join(outputDir, `${safeName}.pdf`);
-    const html = buildResumeHTML(companyName);
-
-    let browser;
-    try {
-        browser = await chromium.launch();
-        const page = await browser.newPage();
-        await page.setContent(html, { waitUntil: 'networkidle' });
-        await page.pdf({
-            path: outputPath,
-            format: 'Letter',
-            printBackground: true,
-            margin: {
-                top: '0.5in',
-                bottom: '0.5in',
-                left: '0.5in',
-                right: '0.5in'
-            }
-        });
-        console.log(`Saved PDF to ${outputPath}`);
-        return outputPath;
-    } catch (err) {
-        console.error('Failed to generate PDF:', err);
-        throw err;
-    } finally {
-        if (browser) await browser.close();
-    }
-}
-
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const companyArg = process.argv[2] || 'hello-world';
-  await generateResume(companyArg).catch(() => process.exit(1));
-}
-
-function buildResumeHTML(companyName) {
-    return `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Christopher Pool - Resume</title>
+export const resumeCSS = `
 <style>
   * {
     margin: 0;
@@ -243,18 +194,16 @@ function buildResumeHTML(companyName) {
     }
   }
 </style>
-</head>
-<body>
-<div class="page">
+`
 
-  <!-- HEADER -->
+export const resumeBody = `
   <div class="header">
     <div class="header-name">Christopher Pool</div>
     <div class="header-contact">
-      ${number} | christopherpool999@gmail.com |
+      (559) 223 - 3280  | christopherpool999@gmail.com |
       <a href="https://www.linkedin.com/in/christopher-pool-1677652a2/" target="_blank">LinkedIn</a> |
       <a href="https://github.com/ChrisPool999" target="_blank">GitHub</a> |
-      ${location}
+      Fresno, CA
     </div>
   </div>
 
@@ -333,9 +282,4 @@ function buildResumeHTML(companyName) {
     <div class="skill-row"><span class="skill-label">Databases:</span> PostgreSQL, SQL, Prisma ORM</div>
     <div class="skill-row"><span class="skill-label">Tools &amp; Infrastructure:</span> Git, Docker, GitHub Actions, CI/CD, Linux</div>
   </div>
-
-</div>
-</body>
-</html>
-    `
-}
+`

@@ -1,5 +1,5 @@
 import { job, MAX_RPM, COOLDOWN_MS, client, RESUME_CUTOFF_SCORE } from './config.js';
-import { generateResume } from './resume-generator.js';
+import { generateResume } from '../resume-builder/resume-generator.js';
 import fs from 'fs'
 import { exit } from 'process';
 import { GoogleGenAI } from "@google/genai";
@@ -80,14 +80,13 @@ async function analysisJobs(data) {
     return results   
 }
 
-function generateResumeFiles(results) {
+async function generateResumeFiles(results) {
     for (let i = results.length - 1; i >= 0; i--) {
-        if (results[i].analysis.score < RESUME_CUTOFF_SCORE) {
-            break
-        }
+        // if (results[i].analysis.score < RESUME_CUTOFF_SCORE) {
+        //     break
+        // }
         const job = results[i].job
-        const jobInfo = "job title: " + job.title + " company name: " + job.companyName + " description: " + job.descriptionText
-        generateResume(jobInfo)
+        await generateResume(job)
     }
 }
 
@@ -122,7 +121,6 @@ function createHTMLFile(results) {
         </body>
         </html>
     `
-
     const filename = "./build/" + (date.getMonth() + 1) + "-" + date.getDate() + ".html"
     fs.writeFileSync(filename, html)
 }
@@ -130,9 +128,8 @@ function createHTMLFile(results) {
 async function main() {
     let indeedJobs  = await getIndeedJobs()
     let results = await analysisJobs(indeedJobs)
-    // generateResumeFiles()
+    generateResumeFiles(results)
     createHTMLFile(results)
-    // generateResume()    
 }
 
 main()

@@ -3,6 +3,7 @@ import "dotenv/config"
 
 export const MAX_RPM = 12
 export const COOLDOWN_MS = 65 * 1000
+export const LINK_OPEN_DELAY_MS = 10 * 1000
 
 export const client = new ApifyClient({
     token: process.env.APIFY_API_KEY,

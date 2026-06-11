@@ -1,0 +1,138 @@
+[
+  {
+    "step": 1,
+    "action": "click",
+    "x": 115,
+    "y": 361,
+    "boundingBox": {
+      "x": 115,
+      "y": 361,
+      "width": 149,
+      "height": 40
+    },
+    "text": "",
+    "description": "Clicking the 'Apply with Indeed' button.",
+    "result": "page did not change — click may have missed",
+    "screenshot": "vision-debug/latest-run/01-click.png",
+    "timestamp": "2026-06-11T05:35:00.013Z"
+  },
+  {
+    "step": 2,
+    "action": "click",
+    "x": 115,
+    "y": 361,
+    "boundingBox": {
+      "x": 115,
+      "y": 361,
+      "width": 115,
+      "height": 40
+    },
+    "text": null,
+    "description": "Click the Apply with Indeed button.",
+    "result": "page did not change — click may have missed",
+    "screenshot": "vision-debug/latest-run/02-click.png",
+    "timestamp": "2026-06-11T05:35:07.267Z"
+  },
+  {
+    "step": 3,
+    "action": "click",
+    "x": 115,
+    "y": 361,
+    "boundingBox": {
+      "x": 115,
+      "y": 361,
+      "width": 145,
+      "height": 38
+    },
+    "text": "",
+    "description": "Clicking the 'Apply with Indeed' button.",
+    "result": "page did not change — click may have missed",
+    "screenshot": "vision-debug/latest-run/03-click.png",
+    "timestamp": "2026-06-11T05:35:15.067Z"
+  },
+  {
+    "step": 4,
+    "action": "click",
+    "x": 116,
+    "y": 361,
+    "boundingBox": {
+      "x": 116,
+      "y": 361,
+      "width": 116,
+      "height": 40
+    },
+    "text": "",
+    "description": "Clicking the 'Apply with Indeed' button again to trigger the application flow.",
+    "result": "page did not change — click may have missed",
+    "screenshot": "vision-debug/latest-run/04-click.png",
+    "timestamp": "2026-06-11T05:35:23.422Z"
+  },
+  {
+    "step": 5,
+    "action": "click",
+    "x": 116,
+    "y": 361,
+    "boundingBox": {
+      "x": 116,
+      "y": 361,
+      "width": 144,
+      "height": 40
+    },
+    "text": "",
+    "description": "Clicking the 'Apply with Indeed' button again to initiate the application process.",
+    "result": "page did not change — click may have missed",
+    "screenshot": "vision-debug/latest-run/05-click.png",
+    "timestamp": "2026-06-11T05:35:31.778Z"
+  },
+  {
+    "step": 6,
+    "action": "click",
+    "x": 115,
+    "y": 361,
+    "boundingBox": {
+      "x": 115,
+      "y": 361,
+      "width": 116,
+      "height": 38
+    },
+    "text": null,
+    "description": "Clicking the 'Apply with Indeed' button again.",
+    "result": "page did not change — click may have missed",
+    "screenshot": "vision-debug/latest-run/06-click.png",
+    "timestamp": "2026-06-11T05:35:39.347Z"
+  },
+  {
+    "step": 7,
+    "action": "click",
+    "x": 115,
+    "y": 361,
+    "boundingBox": {
+      "x": 115,
+      "y": 361,
+      "width": 115,
+      "height": 40
+    },
+    "text": null,
+    "description": "Click the 'Apply with Indeed' button.",
+    "result": "page did not change — click may have missed",
+    "screenshot": "vision-debug/latest-run/07-click.png",
+    "timestamp": "2026-06-11T05:35:47.618Z"
+  },
+  {
+    "step": 8,
+    "action": "click",
+    "x": 115,
+    "y": 361,
+    "boundingBox": {
+      "x": 115,
+      "y": 361,
+      "width": 115,
+      "height": 40
+    },
+    "text": "",
+    "description": "Clicking the 'Apply with Indeed' button again.",
+    "result": "page did not change — click may have missed",
+    "screenshot": "vision-debug/latest-run/08-click.png",
+    "timestamp": "2026-06-11T05:35:55.607Z"
+  }
+]

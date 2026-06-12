@@ -10,22 +10,22 @@ export const client = new ApifyClient({
 });
 
 // lowest score that tailored resumes will be generated for (1-10)
-export const RESUME_CUTOFF_SCORE = 7
+export const RESUME_CUTOFF_SCORE = 6
 
 // job options: { SWE | regularJob | LosAngelesRegular }
 export { SWE as job } 
 
 // search options
-const DAYS_POSTED = "1"
-const MAX_ROWS = 1
+const DAYS_POSTED = "3"
+const MAX_ROWS = 30
 
 // job options
 const SWE = {
     jobQueries : [
         "junior software engineer",
         "junior software developer",
-        // "associate software developer",
-        // "jr developer"
+        "associate software developer",
+        "jr developer"
     ],
 
     SYSTEM_PROMPT : `

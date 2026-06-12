@@ -65,7 +65,9 @@ async function logAction(step, decision, navResult) {
 export async function runVisionLoop(url = INDEED_URL) {
     console.log('Starting orchestrator...\n');
 
-    const browser = await chromium.launch({
+    const browser = await chromium.launch(
+        '/mnt/c/Users/brisb/AppData/Local/Google/Chrome/User Data',
+    {
         headless: false,
         args: ['--start-maximized', `--window-size=${VIEWPORT.width},${VIEWPORT.height}`]
     });

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-export function createStatusLogger({ logDir, runLabel = 'run' } = {}) {
+export function createStatusLogger({ logDir, runLabel = 'run', consoleOutput = true } = {}) {
     if (!logDir) {
         throw new Error('createStatusLogger requires a logDir');
     }
@@ -26,7 +26,9 @@ export function createStatusLogger({ logDir, runLabel = 'run' } = {}) {
         const details = Object.keys(data).length > 0 ? ` ${JSON.stringify(data)}` : '';
         const humanLine = `[${entry.timestamp}] [${level.toUpperCase()}] [${runLabel}] ${message}${details}`;
         fs.appendFileSync(humanLogPath, `${humanLine}\n`, 'utf8');
-        console.log(humanLine);
+        if (consoleOutput) {
+            console.log(humanLine);
+        }
     }
 
     return {

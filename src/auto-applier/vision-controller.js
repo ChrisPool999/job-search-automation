@@ -6,11 +6,13 @@ import { pathToFileURL } from 'url';
 import { getDirectorDecision } from './vision-director.js';
 import { navigateToTarget } from './navigation-agent.js';
 import { createStatusLogger } from './status-logger.js';
+import { createCliDashboard } from './cli-dashboard.js';
 
 const DEFAULT_JOB_URLS = [
     'https://edel.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_2001/job/22744',
     'https://jobs.northropgrumman.com/careers/job/1340071751736?code=JB-18020&domain=ngc.com&rx_a=1&rx_c=engineering&rx_ch=jobp4p&rx_group=543974&rx_id=9b3542a3-5123-11f1-b7c0-b77d8310ea10&rx_job=R10233177&rx_medium=cpc&rx_r=none&rx_source=Indeed&rx_ts=20260706T202526Z&rx_vp=cpc&source=JB-18020&utm_audience=prospectivetalentemployees&utm_campaign=ta-general&utm_content=jobfeed&utm_format=cpl&utm_medium=jobboard&utm_source=indeed',
-    'https://www.amazon.jobs/en/jobs/10423349/embedded-software-engineer-ii-connectivity-systems-at-eero?cmpid=DA_INAD200785B'
+    'https://www.amazon.jobs/en/jobs/10423349/embedded-software-engineer-ii-connectivity-systems-at-eero?cmpid=DA_INAD200785B',
+    'https://ibegin.tcsapps.com/candidate/jobs/413770J',
 ];
 const VIEWPORT = { width: 2560, height: 1080 };
 
@@ -24,15 +26,24 @@ const RUN_CONFIG = {
     keepBrowserOpenForManualReview: process.env.VISION_KEEP_BROWSER_OPEN === '1',
 };
 
+function normalizeEnvValue(value) {
+    return String(value ?? '')
+        .trim()
+        .replace(/^['"]+/, '')
+        .replace(/['"]+$/, '')
+        .replace(/,$/, '')
+        .trim();
+}
+
 function getConfiguredApiKeys() {
-    const requestedSize = Number(process.env.API_KEY_SIZE || 1);
+    const requestedSize = Number(normalizeEnvValue(process.env.API_KEY_SIZE || 1));
     if (!Number.isInteger(requestedSize) || requestedSize < 1) {
         throw new Error(`Invalid API_KEY_SIZE: ${process.env.API_KEY_SIZE}`);
     }
 
     const keys = [];
     for (let i = 1; i <= requestedSize; i++) {
-        const key = process.env[`GEMINI_API_KEY${i}`];
+        const key = normalizeEnvValue(process.env[`GEMINI_API_KEY${i}`]);
         if (!key) {
             throw new Error(`Missing GEMINI_API_KEY${i} for configured API_KEY_SIZE=${requestedSize}`);
         }
@@ -50,11 +61,18 @@ function getConfiguredUrls() {
     return DEFAULT_JOB_URLS.slice(0, apiKeys.length);
 }
 
-const logger = createStatusLogger({ logDir: RUN_CONFIG.runFolder, runLabel: 'vision-controller' });
+const logger = createStatusLogger({ logDir: RUN_CONFIG.runFolder, runLabel: 'vision-controller', consoleOutput: false });
+const dashboard = createCliDashboard({ getSessions: () => sessionsState });
 
 const DEBUG_DIR = RUN_CONFIG.runFolder;
 const ACTION_LOG_PATH = path.join(DEBUG_DIR, 'actions.json');
 let debugActions = [];
+let sessionsState = [];
+
+function isInvalidApiKeyError(err) {
+    const message = String(err?.message || err?.status || '');
+    return message.includes('API key not valid') || message.includes('INVALID_ARGUMENT') || message.includes('API_KEY_INVALID');
+}
 
 async function prepareDebugDir() {
     if (fs.existsSync(DEBUG_DIR)) {
@@ -131,18 +149,59 @@ async function createTabSession(context, tabIndex, url, apiKey) {
     await page.setViewportSize(VIEWPORT);
     await page.bringToFront();
     logger.info('created browser tab', { label, url, apiKeyPrefix: apiKey.slice(0, 8) });
-    return { label, page, url, apiKey, history: [], steps: 0 };
+    return {
+        label,
+        page,
+        url,
+        apiKey,
+        history: [],
+        steps: 0,
+        ui: {
+            status: 'starting',
+            summary: 'initializing',
+            attention: false,
+            events: [],
+        },
+    };
 }
 
 async function runTabSession(session) {
     let steps = 0;
 
+    session.ui.status = 'working';
+    session.ui.summary = 'starting automation';
+    session.ui.events.push({ timestamp: new Date().toISOString(), message: 'automation started' });
+
     while (steps < RUN_CONFIG.maxSteps) {
         const currentStep = steps + 1;
+        session.ui.status = 'working';
+        session.ui.summary = `step ${currentStep}/${RUN_CONFIG.maxSteps} in progress`;
+        session.ui.events = [...(session.ui.events || []), { timestamp: new Date().toISOString(), message: `step ${currentStep}/${RUN_CONFIG.maxSteps} started` }].slice(-20);
         logger.info(`step ${currentStep}/${RUN_CONFIG.maxSteps} starting`, { tab: session.label, url: session.page.url() });
 
         logger.info('director analyzing page', { tab: session.label });
-        const decision = await getDirectorDecisionWithRetry(session.page, session.history.slice(-5), session.apiKey);
+
+        let decision;
+        try {
+            decision = await getDirectorDecisionWithRetry(session.page, session.history.slice(-5), session.apiKey);
+        } catch (err) {
+            if (isInvalidApiKeyError(err)) {
+                session.ui.status = 'waiting';
+                session.ui.summary = 'invalid API key';
+                session.ui.attention = true;
+                session.ui.events = [...(session.ui.events || []), { timestamp: new Date().toISOString(), message: 'invalid API key encountered' }].slice(-20);
+                logger.error('tab stopped due to invalid API key', { tab: session.label, message: err.message });
+                break;
+            }
+
+            session.ui.status = 'waiting';
+            session.ui.summary = 'director error';
+            session.ui.attention = true;
+            session.ui.events = [...(session.ui.events || []), { timestamp: new Date().toISOString(), message: `director error: ${err.message}` }].slice(-20);
+            logger.error('tab stopped due to director error', { tab: session.label, message: err.message });
+            break;
+        }
+
         logger.info('director decision ready', {
             tab: session.label,
             targetText: decision.targetText,
@@ -155,23 +214,36 @@ async function runTabSession(session) {
         await saveStepScreenshot(session.page, currentStep, `${session.label}-director`);
 
         if (decision.targetType === 'done' || decision.pageState === 'summary') {
+            session.ui.status = 'done';
+            session.ui.summary = 'completed successfully';
+            session.ui.events = [...(session.ui.events || []), { timestamp: new Date().toISOString(), message: 'director requested completion' }].slice(-20);
             logger.info('director requested completion', { tab: session.label });
             await logAction(currentStep, decision, null, session.label);
             break;
         }
 
         if (decision.isCycle) {
+            session.ui.status = 'waiting';
+            session.ui.summary = 'cycle detected; manual review needed';
+            session.ui.attention = true;
+            session.ui.events = [...(session.ui.events || []), { timestamp: new Date().toISOString(), message: 'cycle detected' }].slice(-20);
             logger.warn('cycle detected; flagging for manual review', { tab: session.label });
             await logAction(currentStep, decision, null, session.label);
             break;
         }
 
         if (!decision.targetText) {
+            session.ui.status = 'waiting';
+            session.ui.summary = 'no target identified; waiting';
+            session.ui.events = [...(session.ui.events || []), { timestamp: new Date().toISOString(), message: 'no target identified' }].slice(-20);
             logger.warn('no target identified; skipping step', { tab: session.label });
             steps++;
             continue;
         }
 
+        session.ui.status = 'navigating';
+        session.ui.summary = `targeting ${decision.targetText}`;
+        session.ui.events = [...(session.ui.events || []), { timestamp: new Date().toISOString(), message: `navigating to ${decision.targetText}` }].slice(-20);
         logger.info('navigation agent starting', { tab: session.label, targetText: decision.targetText, value: decision.value });
         const urlBefore = session.page.url();
 
@@ -186,6 +258,9 @@ async function runTabSession(session) {
             ? pageChanged ? 'clicked — page navigated' : 'clicked — page unchanged'
             : 'target not found';
 
+        session.ui.status = navResult.success ? 'working' : 'waiting';
+        session.ui.summary = result;
+        session.ui.events = [...(session.ui.events || []), { timestamp: new Date().toISOString(), message: result }].slice(-20);
         logger.info('navigation step completed', { tab: session.label, result, urlBefore, urlAfter });
         await saveStepScreenshot(session.page, currentStep, `${session.label}-after`);
         await logAction(currentStep, decision, { ...navResult, result }, session.label);
@@ -201,6 +276,9 @@ async function runTabSession(session) {
     }
 
     if (steps >= RUN_CONFIG.maxSteps) {
+        session.ui.status = 'waiting';
+        session.ui.summary = 'reached max steps; manual review recommended';
+        session.ui.attention = true;
         logger.warn('reached max steps; manual review recommended', { tab: session.label });
     }
 
@@ -238,6 +316,8 @@ export async function runVisionLoop(url = DEFAULT_JOB_URLS[0], tabCount = null) 
             const session = await createTabSession(context, i, urls[i] || url, apiKeys[i]);
             sessions.push(session);
         }
+        sessionsState = sessions;
+        dashboard.start();
 
         await Promise.all(sessions.map(async (session) => {
             logger.info('opening page', { label: session.label, url: session.url });
@@ -255,6 +335,7 @@ export async function runVisionLoop(url = DEFAULT_JOB_URLS[0], tabCount = null) 
         logger.error('orchestrator failed', { message: err.message });
         throw err;
     } finally {
+        dashboard.stop();
         if (RUN_CONFIG.keepBrowserOpenForManualReview) {
             logger.info('leaving browser open for manual review; press Ctrl+C to stop');
             await new Promise(() => {});

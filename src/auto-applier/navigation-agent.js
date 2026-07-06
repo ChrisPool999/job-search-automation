@@ -141,11 +141,23 @@ export async function navigateToTarget(page, targetText, value = null, maxTabs =
             }
         ];
 
-        const response = await ai.models.generateContent({
-            model: 'gemini-3.1-flash-lite',
-            contents,
-            config: { responseMimeType: 'application/json' }
-        });
+        let response;
+        try {
+            response = await ai.models.generateContent({
+                model: 'gemini-3.1-flash-lite',
+                contents,
+                config: { responseMimeType: 'application/json' }
+            });
+        } catch (error) {
+            navLogger.logWarn(i + 1, 'navigation agent request failed', { error: error.message });
+            return {
+                success: false,
+                tabs: i + 1,
+                matchedText: focused.label || focused.text,
+                confirmedValue: null,
+                error: error.message,
+            };
+        }
         await new Promise((resolve) => setTimeout(resolve, COOLDOWN_MS / MAX_RPM))
 
         try {

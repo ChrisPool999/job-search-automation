@@ -107,6 +107,7 @@ function createHTMLFile(results) {
                 <div>YOE: ${analysis.yoe}</div>
                 <div style="color:${getJobUXColor(analysis.score)}">Reason: ${analysis.reason}</div>
                 <a class="text-blue-300 underline" href=${job.jobUrl}>Job Posting<a>
+                <a class="text-blue-300 underline" href="http://localhost:3001/resume/${encodeURIComponent(job.jobKey)}" target="_blank">Download Resume</a>
             </div>
         `).join('')}
         </body>

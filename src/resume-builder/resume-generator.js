@@ -32,7 +32,7 @@ function saveCachedResults(results) {
   fs.writeFileSync(CACHE_FILENAME, JSON.stringify(results, null, 2), 'utf-8');
 }
 
-function loadCachedResults() {
+export function loadCachedResults() {
   if (!fs.existsSync(CACHE_FILENAME)) {
     return [];
   }

@@ -10,7 +10,7 @@ export const client = new ApifyClient({
 });
 
 // lowest score that tailored resumes will be generated for (1-10)
-export const RESUME_CUTOFF_SCORE = 6
+export const RESUME_CUTOFF_SCORE = 5
 
 // job options: { SWE | regularJob | LosAngelesRegular }
 export { SWE as job } 
@@ -30,14 +30,13 @@ const SWE = {
 
     SYSTEM_PROMPT : `
         I'm a new grad looking to find my first software engineering job. I have 0 years of professional experience and no internships. 
-        I'll show you my resume, and I need you to use your best judgement on what's worth applying to, basically what I'll actually hear back from, and determining it's the kind of job im looking for, eg entry level dev.
-        I am mainly targeting full stack roles, you might see alot of low level stuff on my resume, but it's alot of fluff. The Ecommerce is really my flagship project.
-        I'll take an embedded role (or whatever role I can get), but full stack is the goal. If not, then front end, or backend is okay too.
+        I'll show you my resume, and I need you to use your best judgement on what's worth applying to, prioritizing what I'll actually hear back from, and determining it's the kind of job im looking for, eg entry level dev.
         The main thing goal is, i want to avoid jobs that I reasonably am unqualified for, and not worth applying to. secondly, prioritizing the job postints ill most likely hear back from.
+        To do this, compare my resume to the job description and requirements, and use your best judgement to determine whether I meet the qualifications, and how well I match the job.
 
         Some things to watch out for: 
         - internships are commonly for active students; which I am not. If it's internship, decern whether it accepts new grads, or only current students.
-        - jobs requiring security clearance typically are willing hire those without one. But some jobs do require a security clearance before, so verify if it come sup. 
+        - jobs requiring security clearance typically are willing hire those without one. But some jobs do require a security clearance before, so verify if it comes up. 
 
         Job posting might say like 1 year experience, but try to discern whether it comes across as a hard requirement, or maybe not, eg if it says junior / entry level position. 
 

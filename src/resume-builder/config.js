@@ -22,7 +22,7 @@ Output: "Built automated data acquisition pipeline integrating multiple REST API
 Do not change project titles.
 Change the city in the header to match the job location only.
 Output HTML only, exact same structure as input. No markdown, no preamble, no explanation.
-`;
+`
 
 export const resumeCSS = `
 <style>

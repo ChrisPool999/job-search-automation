@@ -1,7 +1,9 @@
 import { GoogleGenAI } from '@google/genai';
 import { MAX_RPM, COOLDOWN_MS } from '../job-analyzer/config.js';
 
-const ai = new GoogleGenAI({});
+function createAiClient(apiKey) {
+    return new GoogleGenAI({ apiKey });
+}
 
 const DIRECTOR_PROMPT = `
 You are a vision agent analyzing a job application page screenshot.
@@ -34,12 +36,18 @@ Return JSON only, no markdown, no backticks:
 }
 `;
 
-export async function getDirectorDecision(page, history = []) {
+export async function getDirectorDecision(page, history = [], apiKey = process.env.GEMINI_API_KEY1) {
+    const ai = createAiClient(apiKey);
     const buffer = await page.screenshot({ fullPage: false });
     const base64Image = buffer.toString('base64');
 
     const historyText = history.length > 0
-        ? history.map(h => `${h.step}. targeted "${h.targetText}" — result: ${h.result}`).join('\n')
+        ? history.map((h) => {
+            const confirmedValue = h.confirmedValue !== null && h.confirmedValue !== undefined
+                ? `, confirmedValue: ${JSON.stringify(h.confirmedValue)}`
+                : '';
+            return `${h.step}. targeted "${h.targetText}" — result: ${h.result}${confirmedValue}`;
+        }).join('\n')
         : 'No previous actions.';
 
     const prompt = DIRECTOR_PROMPT.replace('{HISTORY}', historyText);

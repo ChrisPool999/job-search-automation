@@ -1,57 +1,86 @@
 [
   {
     "step": 1,
+    "tabLabel": "tab-3",
+    "targetText": "Apply now",
+    "pageState": "job_listing",
+    "confidence": 1,
+    "description": "The user is on a job posting page for an Embedded Software Engineer II position at eero. The 'Apply now' button is the primary action required to start the application process.",
+    "navSuccess": true,
+    "tabsTaken": 15,
+    "matchedText": "Apply now for Embedded Software Engineer II , Connectivity Systems at eero",
+    "timestamp": "2026-07-06T22:28:43.167Z"
+  },
+  {
+    "step": 1,
+    "tabLabel": "tab-1",
     "targetText": "Apply",
     "pageState": "job_listing",
-    "confidence": 0.9,
-    "description": "The user is on the job description page for a 'Junior Software Developer' position. To proceed with the application flow, the most important action is to click the 'Apply' button (which is likely hidden or needs to be scrolled to, but as per instructions, I am identifying the primary action for this page).",
+    "confidence": 0.85,
+    "description": "The page is a job listing for 'Junior Software Developer'. To proceed with the application, the 'Apply' button is the necessary next step. While it is not explicitly visible in the current view area of the screenshot, it is standard for this type of page to contain an 'Apply' button below the job information summary to initiate the process.",
     "navSuccess": true,
     "tabsTaken": 16,
     "matchedText": "APPLY NOW",
-    "timestamp": "2026-07-06T21:11:33.653Z"
+    "timestamp": "2026-07-06T22:28:48.225Z"
+  },
+  {
+    "step": 1,
+    "tabLabel": "tab-2",
+    "targetText": "Apply Now",
+    "pageState": "job_listing",
+    "confidence": 1,
+    "description": "I have identified the 'Apply Now' button as the primary action to proceed with the job application process for the 'Principal / Sr. Principal Software Engineer' position.",
+    "navSuccess": true,
+    "tabsTaken": 16,
+    "matchedText": "Apply Now",
+    "timestamp": "2026-07-06T22:28:51.262Z"
   },
   {
     "step": 2,
-    "targetText": "Email Address",
-    "pageState": "application_form",
+    "tabLabel": "tab-3",
+    "targetText": "Email address",
+    "pageState": "login",
     "confidence": 1,
-    "description": "The email address field is the first required input to proceed with the job application.",
+    "description": "The user is on the login page and needs to enter their credentials to proceed with the job application flow. The first required field is the email address input.",
     "navSuccess": true,
-    "tabsTaken": 5,
-    "matchedText": "Email Address",
-    "timestamp": "2026-07-06T21:12:19.015Z"
+    "tabsTaken": 1,
+    "matchedText": "Email address*",
+    "timestamp": "2026-07-06T22:29:02.555Z"
+  },
+  {
+    "step": 2,
+    "tabLabel": "tab-2",
+    "targetText": "Email",
+    "pageState": "login",
+    "confidence": 1,
+    "description": "The user is on a sign-in modal. To proceed with the application process, the email address field must be filled out to continue.",
+    "navSuccess": true,
+    "tabsTaken": 2,
+    "matchedText": "Email",
+    "timestamp": "2026-07-06T22:29:16.488Z"
   },
   {
     "step": 3,
-    "targetText": "I acknowledge that I have read and agree to the terms to the Privacy Statement and Acknowledgement",
-    "pageState": "application_form",
+    "tabLabel": "tab-3",
+    "targetText": "Password",
+    "pageState": "login",
     "confidence": 1,
-    "description": "The user has filled in their email address but must check the acknowledgement checkbox before clicking the 'NEXT' button to proceed.",
+    "description": "The email address field has been filled, so the next logical step in the login form is to enter the password.",
     "navSuccess": true,
     "tabsTaken": 2,
-    "matchedText": "I acknowledge that I have read and agree to the terms to the Privacy Statement and Acknowledgement",
-    "timestamp": "2026-07-06T21:12:44.329Z"
+    "matchedText": "Password\nPassword is hidden\n*",
+    "timestamp": "2026-07-06T22:29:27.484Z"
   },
   {
-    "step": 4,
-    "targetText": "NEXT",
+    "step": 2,
+    "tabLabel": "tab-1",
+    "targetText": "Email Address *",
     "pageState": "application_form",
     "confidence": 1,
-    "description": "The user has already entered an email address and checked the mandatory acknowledgment box. The next logical step to proceed with the application is to click the 'NEXT' button.",
+    "description": "The form requires an email address to proceed with the job application.",
     "navSuccess": true,
-    "tabsTaken": 4,
-    "matchedText": "Next",
-    "timestamp": "2026-07-06T21:13:21.509Z"
-  },
-  {
-    "step": 5,
-    "targetText": "I acknowledge that I have read and agree to the terms to the Privacy Statement and Acknowledgement",
-    "pageState": "application_form",
-    "confidence": 1,
-    "description": "The user must click the checkbox to acknowledge the terms and conditions before they can proceed. The previous attempt to click 'NEXT' failed because this checkbox was not selected.",
-    "navSuccess": null,
-    "tabsTaken": null,
-    "matchedText": null,
-    "timestamp": "2026-07-06T21:13:30.176Z"
+    "tabsTaken": 5,
+    "matchedText": "Email Address",
+    "timestamp": "2026-07-06T22:29:33.882Z"
   }
 ]

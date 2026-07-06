@@ -5,16 +5,52 @@ import { chromium } from 'playwright';
 import { pathToFileURL } from 'url';
 import { getDirectorDecision } from './vision-director.js';
 import { navigateToTarget } from './navigation-agent.js';
+import { createStatusLogger } from './status-logger.js';
 
-const INDEED_URL = 'https://edel.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_2001/job/22744';
+const DEFAULT_JOB_URLS = [
+    'https://edel.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_2001/job/22744',
+    'https://jobs.northropgrumman.com/careers/job/1340071751736?code=JB-18020&domain=ngc.com&rx_a=1&rx_c=engineering&rx_ch=jobp4p&rx_group=543974&rx_id=9b3542a3-5123-11f1-b7c0-b77d8310ea10&rx_job=R10233177&rx_medium=cpc&rx_r=none&rx_source=Indeed&rx_ts=20260706T202526Z&rx_vp=cpc&source=JB-18020&utm_audience=prospectivetalentemployees&utm_campaign=ta-general&utm_content=jobfeed&utm_format=cpl&utm_medium=jobboard&utm_source=indeed',
+    'https://www.amazon.jobs/en/jobs/10423349/embedded-software-engineer-ii-connectivity-systems-at-eero?cmpid=DA_INAD200785B'
+];
 const VIEWPORT = { width: 2560, height: 1080 };
 
 const RUN_CONFIG = {
     runFolder: path.join('vision-debug', 'latest-run'),
     maxSteps: 25,
     postClickDelayMs: 3000,
-    pageReadyDelayMs: 500,
+    pageReadyDelayMs: 2000,
+    directorRetryAttempts: 3,
+    directorRetryDelayMs: 2000,
+    keepBrowserOpenForManualReview: process.env.VISION_KEEP_BROWSER_OPEN === '1',
 };
+
+function getConfiguredApiKeys() {
+    const requestedSize = Number(process.env.API_KEY_SIZE || 1);
+    if (!Number.isInteger(requestedSize) || requestedSize < 1) {
+        throw new Error(`Invalid API_KEY_SIZE: ${process.env.API_KEY_SIZE}`);
+    }
+
+    const keys = [];
+    for (let i = 1; i <= requestedSize; i++) {
+        const key = process.env[`GEMINI_API_KEY${i}`];
+        if (!key) {
+            throw new Error(`Missing GEMINI_API_KEY${i} for configured API_KEY_SIZE=${requestedSize}`);
+        }
+        keys.push(key);
+    }
+
+    return keys;
+}
+
+function getConfiguredUrls() {
+    const apiKeys = getConfiguredApiKeys();
+    if (DEFAULT_JOB_URLS.length !== apiKeys.length) {
+        throw new Error(`Expected ${apiKeys.length} job URLs to match API_KEY_SIZE=${apiKeys.length}, but found ${DEFAULT_JOB_URLS.length}`);
+    }
+    return DEFAULT_JOB_URLS.slice(0, apiKeys.length);
+}
+
+const logger = createStatusLogger({ logDir: RUN_CONFIG.runFolder, runLabel: 'vision-controller' });
 
 const DEBUG_DIR = RUN_CONFIG.runFolder;
 const ACTION_LOG_PATH = path.join(DEBUG_DIR, 'actions.json');
@@ -34,10 +70,36 @@ async function ensurePageReady(page) {
     try {
         await page.waitForLoadState('domcontentloaded', { timeout: 10000 });
     } catch {
-        console.log('   ⚠️ page ready timeout, continuing anyway');
+        logger.warn('page ready timeout; continuing anyway');
     }
     await page.waitForTimeout(RUN_CONFIG.pageReadyDelayMs);
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+}
+
+async function getDirectorDecisionWithRetry(page, history) {
+    let lastDecision = null;
+
+    for (let attempt = 1; attempt <= RUN_CONFIG.directorRetryAttempts; attempt++) {
+        const decision = await getDirectorDecision(page, history);
+        lastDecision = decision;
+
+        const description = `${decision.description || ''} ${decision.pageState || ''}`.toLowerCase();
+        const appearsToBeLoading = description.includes('loading') || description.includes('spinner') || description.includes('loading state');
+
+        if (!appearsToBeLoading) {
+            return decision;
+        }
+
+        if (attempt < RUN_CONFIG.directorRetryAttempts) {
+            logger.warn('director saw loading state; retrying after delay', {
+                attempt,
+                description: decision.description,
+            });
+            await page.waitForTimeout(RUN_CONFIG.directorRetryDelayMs);
+        }
+    }
+
+    return lastDecision;
 }
 
 async function saveStepScreenshot(page, step, label) {
@@ -47,9 +109,10 @@ async function saveStepScreenshot(page, step, label) {
     return filename;
 }
 
-async function logAction(step, decision, navResult) {
+async function logAction(step, decision, navResult, tabLabel = 'tab-1') {
     debugActions.push({
         step,
+        tabLabel,
         targetText: decision.targetText,
         pageState: decision.pageState,
         confidence: decision.confidence,
@@ -62,98 +125,142 @@ async function logAction(step, decision, navResult) {
     await fs.promises.writeFile(ACTION_LOG_PATH, JSON.stringify(debugActions, null, 2));
 }
 
-export async function runVisionLoop(url = INDEED_URL) {
-    console.log('Starting orchestrator...\n');
-
-    const browser = await chromium.launch(
-        '/mnt/c/Users/brisb/AppData/Local/Google/Chrome/User Data',
-    {
-        headless: false,
-        args: ['--start-maximized', `--window-size=${VIEWPORT.width},${VIEWPORT.height}`]
-    });
-    const context = await browser.newContext({ viewport: VIEWPORT, screen: VIEWPORT });
+async function createTabSession(context, tabIndex, url, apiKey) {
     const page = await context.newPage();
+    const label = `tab-${tabIndex + 1}`;
+    await page.setViewportSize(VIEWPORT);
     await page.bringToFront();
+    logger.info('created browser tab', { label, url, apiKeyPrefix: apiKey.slice(0, 8) });
+    return { label, page, url, apiKey, history: [], steps: 0 };
+}
+
+async function runTabSession(session) {
+    let steps = 0;
+
+    while (steps < RUN_CONFIG.maxSteps) {
+        const currentStep = steps + 1;
+        logger.info(`step ${currentStep}/${RUN_CONFIG.maxSteps} starting`, { tab: session.label, url: session.page.url() });
+
+        logger.info('director analyzing page', { tab: session.label });
+        const decision = await getDirectorDecisionWithRetry(session.page, session.history.slice(-5), session.apiKey);
+        logger.info('director decision ready', {
+            tab: session.label,
+            targetText: decision.targetText,
+            targetType: decision.targetType,
+            pageState: decision.pageState,
+            confidence: decision.confidence,
+            description: decision.description,
+        });
+
+        await saveStepScreenshot(session.page, currentStep, `${session.label}-director`);
+
+        if (decision.targetType === 'done' || decision.pageState === 'summary') {
+            logger.info('director requested completion', { tab: session.label });
+            await logAction(currentStep, decision, null, session.label);
+            break;
+        }
+
+        if (decision.isCycle) {
+            logger.warn('cycle detected; flagging for manual review', { tab: session.label });
+            await logAction(currentStep, decision, null, session.label);
+            break;
+        }
+
+        if (!decision.targetText) {
+            logger.warn('no target identified; skipping step', { tab: session.label });
+            steps++;
+            continue;
+        }
+
+        logger.info('navigation agent starting', { tab: session.label, targetText: decision.targetText, value: decision.value });
+        const urlBefore = session.page.url();
+
+        const navResult = await navigateToTarget(session.page, decision.targetText, decision.value, 50, logger, session.apiKey);
+
+        await session.page.waitForTimeout(RUN_CONFIG.postClickDelayMs);
+        await ensurePageReady(session.page);
+
+        const urlAfter = session.page.url();
+        const pageChanged = urlAfter !== urlBefore;
+        const result = navResult.success
+            ? pageChanged ? 'clicked — page navigated' : 'clicked — page unchanged'
+            : 'target not found';
+
+        logger.info('navigation step completed', { tab: session.label, result, urlBefore, urlAfter });
+        await saveStepScreenshot(session.page, currentStep, `${session.label}-after`);
+        await logAction(currentStep, decision, { ...navResult, result }, session.label);
+
+        session.history.push({
+            step: currentStep,
+            targetText: decision.targetText,
+            result,
+            confirmedValue: navResult?.confirmedValue ?? null,
+        });
+
+        steps++;
+    }
+
+    if (steps >= RUN_CONFIG.maxSteps) {
+        logger.warn('reached max steps; manual review recommended', { tab: session.label });
+    }
+
+    const finalPath = path.join(DEBUG_DIR, `${session.label}-final-state.png`);
+    await session.page.screenshot({ path: finalPath });
+    logger.info('captured final state screenshot', { tab: session.label, path: finalPath });
+}
+
+export async function runVisionLoop(url = DEFAULT_JOB_URLS[0], tabCount = null) {
+    const apiKeys = getConfiguredApiKeys();
+    const configuredUrls = getConfiguredUrls();
+    const targetTabCount = tabCount ?? apiKeys.length;
+    const urls = configuredUrls.slice(0, targetTabCount);
+    logger.info('starting orchestrator', { url, tabCount: targetTabCount, apiKeys: apiKeys.length });
+
+    const launchOptions = {
+        headless: false,
+        args: ['--start-maximized', `--window-size=${VIEWPORT.width},${VIEWPORT.height}`],
+    };
+
+    if (process.env.CHROME_EXECUTABLE_PATH) {
+        launchOptions.executablePath = process.env.CHROME_EXECUTABLE_PATH;
+    }
+
+    logger.info('launching visible browser', { headless: launchOptions.headless, keepBrowserOpen: RUN_CONFIG.keepBrowserOpenForManualReview });
+    const browser = await chromium.launch(launchOptions);
+    const context = await browser.newContext({ viewport: VIEWPORT, screen: VIEWPORT });
+    const sessions = [];
 
     try {
-        await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
-        await ensurePageReady(page);
         await prepareDebugDir();
+        logger.info('debug directory prepared', { runFolder: RUN_CONFIG.runFolder });
 
-        let steps = 0;
-        const directorHistory = [];
-
-        while (steps < RUN_CONFIG.maxSteps) {
-            const currentStep = steps + 1;
-            console.log(`\n=== Step ${currentStep}/${RUN_CONFIG.maxSteps} ===`);
-
-            // --- Vision Director decides what to click ---
-            console.log('Director analyzing page...');
-            const decision = await getDirectorDecision(page, directorHistory.slice(-5));
-            console.log(`Director: "${decision.targetText}" (${decision.pageState}) confidence: ${decision.confidence}`);
-            console.log(`Director: ${decision.description}`);
-
-            await saveStepScreenshot(page, currentStep, 'director');
-
-            if (decision.targetType === 'done' || decision.pageState === 'summary') {
-                console.log('\n✓ Director says done');
-                await logAction(currentStep, decision, null);
-                break;
-            }
-
-            if (decision.isCycle) {
-                console.log('\n⚠️ Cycle detected — flagging for manual review');
-                await logAction(currentStep, decision, null);
-                break;
-            }
-
-            if (!decision.targetText) {
-                console.log('\n⚠️ No target identified — skipping step');
-                steps++;
-                continue;
-            }
-
-            // --- Nav Agent finds and clicks the target ---
-            console.log(`\nNav agent looking for: "${decision.targetText}"`);
-            const urlBefore = page.url();
-
-            const navResult = await navigateToTarget(page, decision.targetText, decision.value);
-
-            await page.waitForTimeout(RUN_CONFIG.postClickDelayMs);
-            await ensurePageReady(page);
-
-            const urlAfter = page.url();
-            const pageChanged = urlAfter !== urlBefore;
-            const result = navResult.success
-                ? pageChanged ? 'clicked — page navigated' : 'clicked — page unchanged'
-                : 'target not found';
-
-            console.log(`Result: ${result}`);
-            await saveStepScreenshot(page, currentStep, 'after');
-            await logAction(currentStep, decision, { ...navResult, result });
-
-            directorHistory.push({
-                step: currentStep,
-                targetText: decision.targetText,
-                result,
-            });
-
-            steps++;
+        for (let i = 0; i < targetTabCount; i++) {
+            const session = await createTabSession(context, i, urls[i] || url, apiKeys[i]);
+            sessions.push(session);
         }
 
-        if (steps >= RUN_CONFIG.maxSteps) {
-            console.log('\nHit max steps — needs manual review.');
+        await Promise.all(sessions.map(async (session) => {
+            logger.info('opening page', { label: session.label, url: session.url });
+            await session.page.goto(session.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+            await ensurePageReady(session.page);
+        }));
+
+        const activeSession = sessions[0];
+        if (activeSession) {
+            await activeSession.page.bringToFront();
         }
 
-        const finalPath = path.join(DEBUG_DIR, 'final-state.png');
-        await page.screenshot({ path: finalPath });
-        console.log(`\nFinal screenshot: ${finalPath}`);
-
+        await Promise.all(sessions.map((session) => runTabSession(session)));
     } catch (err) {
-        console.error('\n✗ Error:', err.message);
+        logger.error('orchestrator failed', { message: err.message });
         throw err;
     } finally {
-        await browser.close();
+        if (RUN_CONFIG.keepBrowserOpenForManualReview) {
+            logger.info('leaving browser open for manual review; press Ctrl+C to stop');
+            await new Promise(() => {});
+        } else {
+            await browser.close();
+        }
     }
 }
 

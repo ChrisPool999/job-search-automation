@@ -13,6 +13,7 @@ const DEFAULT_JOB_URLS = [
     'https://jobs.northropgrumman.com/careers/job/1340071751736?code=JB-18020&domain=ngc.com&rx_a=1&rx_c=engineering&rx_ch=jobp4p&rx_group=543974&rx_id=9b3542a3-5123-11f1-b7c0-b77d8310ea10&rx_job=R10233177&rx_medium=cpc&rx_r=none&rx_source=Indeed&rx_ts=20260706T202526Z&rx_vp=cpc&source=JB-18020&utm_audience=prospectivetalentemployees&utm_campaign=ta-general&utm_content=jobfeed&utm_format=cpl&utm_medium=jobboard&utm_source=indeed',
     'https://www.amazon.jobs/en/jobs/10423349/embedded-software-engineer-ii-connectivity-systems-at-eero?cmpid=DA_INAD200785B',
     'https://ibegin.tcsapps.com/candidate/jobs/413770J',
+    'https://jobs.siemens.com/en_US/externaljobs/JobDetail/507945?source=Indeed&source=Indeed'
 ];
 const VIEWPORT = { width: 2560, height: 1080 };
 
@@ -94,11 +95,11 @@ async function ensurePageReady(page) {
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 }
 
-async function getDirectorDecisionWithRetry(page, history) {
+async function getDirectorDecisionWithRetry(page, history, apiKey = null, operatorInstruction = null) {
     let lastDecision = null;
 
     for (let attempt = 1; attempt <= RUN_CONFIG.directorRetryAttempts; attempt++) {
-        const decision = await getDirectorDecision(page, history);
+        const decision = await getDirectorDecision(page, history, apiKey, operatorInstruction);
         lastDecision = decision;
 
         const description = `${decision.description || ''} ${decision.pageState || ''}`.toLowerCase();
@@ -160,9 +161,23 @@ async function createTabSession(context, tabIndex, url, apiKey) {
             status: 'starting',
             summary: 'initializing',
             attention: false,
+            pendingInstruction: null,
+            killed: false,
             events: [],
         },
     };
+}
+
+async function waitForOperator(session) {
+    while (session?.ui?.attention && !session?.ui?.killed) {
+        session.ui.status = 'waiting';
+        session.ui.summary = session.ui.pendingInstruction ? `awaiting operator: ${session.ui.pendingInstruction}` : 'waiting for operator';
+        session.ui.events = [
+            ...(session.ui.events || []),
+            { timestamp: new Date().toISOString(), message: 'waiting for operator instruction' },
+        ].slice(-20);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+    }
 }
 
 async function runTabSession(session) {
@@ -173,6 +188,24 @@ async function runTabSession(session) {
     session.ui.events.push({ timestamp: new Date().toISOString(), message: 'automation started' });
 
     while (steps < RUN_CONFIG.maxSteps) {
+        if (session.ui.killed) {
+            break;
+        }
+
+        if (session.ui.attention) {
+            await waitForOperator(session);
+            if (session.ui.killed) {
+                break;
+            }
+            session.ui.attention = false;
+            session.ui.status = 'working';
+            session.ui.summary = session.ui.pendingInstruction ? `resumed with: ${session.ui.pendingInstruction}` : 'resumed by operator';
+            session.ui.events = [
+                ...(session.ui.events || []),
+                { timestamp: new Date().toISOString(), message: 'resumed by operator' },
+            ].slice(-20);
+        }
+
         const currentStep = steps + 1;
         session.ui.status = 'working';
         session.ui.summary = `step ${currentStep}/${RUN_CONFIG.maxSteps} in progress`;
@@ -181,9 +214,14 @@ async function runTabSession(session) {
 
         logger.info('director analyzing page', { tab: session.label });
 
+        const operatorInstruction = session.ui.pendingInstruction || null;
+        if (operatorInstruction) {
+            session.ui.pendingInstruction = null;
+        }
+
         let decision;
         try {
-            decision = await getDirectorDecisionWithRetry(session.page, session.history.slice(-5), session.apiKey);
+            decision = await getDirectorDecisionWithRetry(session.page, session.history.slice(-5), session.apiKey, operatorInstruction);
         } catch (err) {
             if (isInvalidApiKeyError(err)) {
                 session.ui.status = 'waiting';
@@ -229,7 +267,11 @@ async function runTabSession(session) {
             session.ui.events = [...(session.ui.events || []), { timestamp: new Date().toISOString(), message: 'cycle detected' }].slice(-20);
             logger.warn('cycle detected; flagging for manual review', { tab: session.label });
             await logAction(currentStep, decision, null, session.label);
-            break;
+            await waitForOperator(session);
+            if (session.ui.killed) {
+                break;
+            }
+            continue;
         }
 
         if (!decision.targetText) {

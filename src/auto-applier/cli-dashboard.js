@@ -46,6 +46,44 @@ function getSummary(session) {
     return session?.ui?.summary || 'waiting for first update';
 }
 
+function promptForInstruction(session, render) {
+    if (!session || !process.stdout.isTTY) {
+        return;
+    }
+
+    const promptText = session.ui?.pendingInstruction
+        ? 'Update instruction (blank to resume): '
+        : 'Operator instruction (optional, press Enter to resume): ';
+
+    process.stdout.write('\x1b[?25h');
+    if (process.stdin.isTTY) {
+        process.stdin.setRawMode(false);
+    }
+
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(promptText, (answer) => {
+        rl.close();
+        if (process.stdin.isTTY) {
+            process.stdin.setRawMode(true);
+        }
+        process.stdout.write('\x1b[?25l');
+
+        const instruction = (answer || '').trim();
+        if (instruction) {
+            session.ui.pendingInstruction = instruction;
+            session.ui.events = [
+                ...(session.ui.events || []),
+                { timestamp: new Date().toISOString(), message: `operator instruction: ${instruction}` },
+            ].slice(-20);
+        }
+
+        session.ui.attention = false;
+        session.ui.status = 'working';
+        session.ui.summary = instruction ? `resumed with: ${instruction}` : 'resumed by operator';
+        render();
+    });
+}
+
 export function createCliDashboard({ getSessions } = {}) {
     let active = false;
     let selectedIndex = 0;
@@ -63,9 +101,9 @@ export function createCliDashboard({ getSessions } = {}) {
         process.stdout.write('\x1b[?25l');
         console.log(colorize('Automation Tab Dashboard', 'cyan', { bright: true }));
         if (detailView) {
-            console.log(colorize('j: go back • k: move up • p: ping • q: quit', 'dim'));
+            console.log(colorize('Backspace: back • Enter: go • r: resolve • q: quit', 'dim'));
         } else {
-            console.log(colorize('j/k: move • Enter: inspect • p: ping • q: quit', 'dim'));
+            console.log(colorize('w/s: move • Enter: go • r: resolve • q: quit', 'dim'));
         }
         console.log('');
 
@@ -79,6 +117,7 @@ export function createCliDashboard({ getSessions } = {}) {
             console.log(colorize(`Tab: ${session.label}`, 'cyan', { bright: true }));
             console.log(colorize(`Status: ${session.ui?.status || 'idle'}`, 'white'));
             console.log(colorize(`Summary: ${getSummary(session)}`, 'white'));
+            console.log(colorize(`Pending instruction: ${session.ui?.pendingInstruction || 'none'}`, 'white'));
             console.log('');
             console.log(colorize('Recent events:', 'yellow'));
             const events = session.ui?.events || [];
@@ -91,7 +130,7 @@ export function createCliDashboard({ getSessions } = {}) {
                 });
             }
             console.log('');
-            console.log(colorize('Press j to go back to the tab list', 'dim'));
+            console.log(colorize('Press Backspace to go back to the tab list', 'dim'));
             return;
         }
 
@@ -115,27 +154,43 @@ export function createCliDashboard({ getSessions } = {}) {
         }
 
         if (detailView) {
-            if (key.name === 'j' || key.name === 'escape' || key.name === 'backspace') {
+            if (key.name === 'backspace' || key.name === 'escape') {
                 detailView = false;
                 render();
                 return;
             }
 
-            if (key.name === 'k') {
+            if (key.name === 'w') {
                 selectedIndex = Math.max(0, selectedIndex - 1);
                 render();
                 return;
             }
 
-            if (key.name === 'p') {
+            if (key.name === 's') {
+                const sessions = getSessions?.() || [];
+                selectedIndex = Math.min(Math.max(0, sessions.length - 1), selectedIndex + 1);
+                render();
+                return;
+            }
+
+            if (key.name === 'return') {
+                const sessions = getSessions?.() || [];
+                const session = sessions[selectedIndex];
+                promptForInstruction(session, render);
+                return;
+            }
+
+            if (key.name === 'r') {
                 const sessions = getSessions?.() || [];
                 const session = sessions[selectedIndex];
                 if (session?.ui) {
-                    session.ui.attention = true;
-                    session.ui.summary = 'Pinged — needs attention';
+                    session.ui.attention = false;
+                    session.ui.pendingInstruction = null;
+                    session.ui.status = 'waiting';
+                    session.ui.summary = 'resolved by operator';
                     session.ui.events = [
                         ...(session.ui.events || []),
-                        { timestamp: new Date().toISOString(), message: 'Pinged by operator' },
+                        { timestamp: new Date().toISOString(), message: 'resolved by operator' },
                     ].slice(-20);
                 }
                 render();
@@ -145,13 +200,13 @@ export function createCliDashboard({ getSessions } = {}) {
             return;
         }
 
-        if (key.name === 'up' || key.name === 'k') {
+        if (key.name === 'w' || key.name === 'up') {
             selectedIndex = Math.max(0, selectedIndex - 1);
             render();
             return;
         }
 
-        if (key.name === 'down' || key.name === 'j') {
+        if (key.name === 's' || key.name === 'down') {
             const sessions = getSessions?.() || [];
             selectedIndex = Math.min(Math.max(0, sessions.length - 1), selectedIndex + 1);
             render();
@@ -164,15 +219,17 @@ export function createCliDashboard({ getSessions } = {}) {
             return;
         }
 
-        if (key.name === 'p') {
+        if (key.name === 'r') {
             const sessions = getSessions?.() || [];
             const session = sessions[selectedIndex];
             if (session?.ui) {
-                session.ui.attention = true;
-                session.ui.summary = 'Pinged — needs attention';
+                session.ui.attention = false;
+                session.ui.pendingInstruction = null;
+                session.ui.status = 'waiting';
+                session.ui.summary = 'resolved by operator';
                 session.ui.events = [
                     ...(session.ui.events || []),
-                    { timestamp: new Date().toISOString(), message: 'Pinged by operator' },
+                    { timestamp: new Date().toISOString(), message: 'resolved by operator' },
                 ].slice(-20);
             }
             render();

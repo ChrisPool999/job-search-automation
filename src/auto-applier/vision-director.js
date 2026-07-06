@@ -11,12 +11,20 @@ Your job is to identify the single most important button or action to take next,
 
 Screenshot is exactly 2560x1080 pixels.
 
+Operator instruction:
+{OPERATOR_INSTRUCTION}
+
 Rules:
 - Focus only on progressing through the job application flow
 - Ignore search bars, navigation links, sign in buttons
 - If you see an apply button, that is the target
 - If you see a form, identify the next unfilled field
 - If you see a summary/review page, the task is complete
+- Prioritize using Google OAuth / Sign in with Google when offered as a sign-in option
+- If Google OAuth is available, prefer that over manual email/password entry
+- If the page offers manual email/password fields and the environment provides credentials, use those fields to sign in or create an account as needed
+- Assume an account may need to be created if the site does not offer the option to sign in with Google
+- Keep all credentials handling secure and avoid exposing secrets in the reasoning or output
 
 Cycle detection: if recent history shows the same action repeated 3+ times with no page change, 
 flag it as a cycle and return done.
@@ -36,7 +44,7 @@ Return JSON only, no markdown, no backticks:
 }
 `;
 
-export async function getDirectorDecision(page, history = [], apiKey = process.env.GEMINI_API_KEY1) {
+export async function getDirectorDecision(page, history = [], apiKey = process.env.GEMINI_API_KEY1, operatorInstruction = null) {
     const ai = createAiClient(apiKey);
     const buffer = await page.screenshot({ fullPage: false });
     const base64Image = buffer.toString('base64');
@@ -50,7 +58,9 @@ export async function getDirectorDecision(page, history = [], apiKey = process.e
         }).join('\n')
         : 'No previous actions.';
 
-    const prompt = DIRECTOR_PROMPT.replace('{HISTORY}', historyText);
+    const prompt = DIRECTOR_PROMPT
+        .replace('{HISTORY}', historyText)
+        .replace('{OPERATOR_INSTRUCTION}', operatorInstruction ? operatorInstruction : 'none');
 
     const contents = [
         { inlineData: { mimeType: 'image/png', data: base64Image } },

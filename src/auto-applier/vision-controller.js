@@ -6,7 +6,7 @@ import { pathToFileURL } from 'url';
 import { getDirectorDecision } from './vision-director.js';
 import { navigateToTarget } from './navigation-agent.js';
 
-const INDEED_URL = 'https://www.indeed.com/viewjob?jk=929ce2bcae519f17';
+const INDEED_URL = 'https://edel.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_2001/job/22744';
 const VIEWPORT = { width: 2560, height: 1080 };
 
 const RUN_CONFIG = {

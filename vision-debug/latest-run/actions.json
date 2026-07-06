@@ -1,1 +1,57 @@
-[]
+[
+  {
+    "step": 1,
+    "targetText": "Apply",
+    "pageState": "job_listing",
+    "confidence": 0.9,
+    "description": "The user is on the job description page for a 'Junior Software Developer' position. To proceed with the application flow, the most important action is to click the 'Apply' button (which is likely hidden or needs to be scrolled to, but as per instructions, I am identifying the primary action for this page).",
+    "navSuccess": true,
+    "tabsTaken": 16,
+    "matchedText": "APPLY NOW",
+    "timestamp": "2026-07-06T21:11:33.653Z"
+  },
+  {
+    "step": 2,
+    "targetText": "Email Address",
+    "pageState": "application_form",
+    "confidence": 1,
+    "description": "The email address field is the first required input to proceed with the job application.",
+    "navSuccess": true,
+    "tabsTaken": 5,
+    "matchedText": "Email Address",
+    "timestamp": "2026-07-06T21:12:19.015Z"
+  },
+  {
+    "step": 3,
+    "targetText": "I acknowledge that I have read and agree to the terms to the Privacy Statement and Acknowledgement",
+    "pageState": "application_form",
+    "confidence": 1,
+    "description": "The user has filled in their email address but must check the acknowledgement checkbox before clicking the 'NEXT' button to proceed.",
+    "navSuccess": true,
+    "tabsTaken": 2,
+    "matchedText": "I acknowledge that I have read and agree to the terms to the Privacy Statement and Acknowledgement",
+    "timestamp": "2026-07-06T21:12:44.329Z"
+  },
+  {
+    "step": 4,
+    "targetText": "NEXT",
+    "pageState": "application_form",
+    "confidence": 1,
+    "description": "The user has already entered an email address and checked the mandatory acknowledgment box. The next logical step to proceed with the application is to click the 'NEXT' button.",
+    "navSuccess": true,
+    "tabsTaken": 4,
+    "matchedText": "Next",
+    "timestamp": "2026-07-06T21:13:21.509Z"
+  },
+  {
+    "step": 5,
+    "targetText": "I acknowledge that I have read and agree to the terms to the Privacy Statement and Acknowledgement",
+    "pageState": "application_form",
+    "confidence": 1,
+    "description": "The user must click the checkbox to acknowledge the terms and conditions before they can proceed. The previous attempt to click 'NEXT' failed because this checkbox was not selected.",
+    "navSuccess": null,
+    "tabsTaken": null,
+    "matchedText": null,
+    "timestamp": "2026-07-06T21:13:30.176Z"
+  }
+]

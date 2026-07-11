@@ -176,6 +176,7 @@ export async function navigateToTarget(page, targetText, value = null, maxTabs =
                                 tabs: i + 1,
                                 matchedText: focused.label || focused.text,
                                 confirmedValue: fillResult.confirmedValue,
+                                thought: `Typed value into focused input: ${focused.label || focused.text}`,
                             };
                         }
 
@@ -185,6 +186,7 @@ export async function navigateToTarget(page, targetText, value = null, maxTabs =
                             tabs: i + 1,
                             matchedText: focused.label || focused.text,
                             confirmedValue: null,
+                            thought: 'Attempted to type into input but could not confirm the value',
                         };
                     }
 
@@ -196,35 +198,58 @@ export async function navigateToTarget(page, targetText, value = null, maxTabs =
                             tabs: i + 1,
                             matchedText: focused.label || focused.text,
                             confirmedValue: toggleResult.checked,
+                            thought: `Toggled ${focused.type} control ${focused.label || focused.text}`,
                         };
                     }
 
                     navLogger.logStep(i + 1, 'focused input field without provided value');
-                } else {
-                    navLogger.logStep(i + 1, 'pressing Enter on focused control');
-                    await page.keyboard.press('Enter');
+                    return {
+                        success: true,
+                        tabs: i + 1,
+                        matchedText: focused.label || focused.text,
+                        confirmedValue: focused.value ?? null,
+                        thought: `Interacted with focused input field ${focused.label || focused.text}`,
+                    };
                 }
+
+                navLogger.logStep(i + 1, 'pressing Enter on focused control');
+                await page.keyboard.press('Enter');
                 return {
                     success: true,
                     tabs: i + 1,
                     matchedText: focused.label || focused.text,
                     confirmedValue: focused.value ?? null,
+                    thought: `Pressed Enter on focused control ${focused.label || focused.text}`,
                 };
             }
 
             if (result.action === 'notfound') {
                 navLogger.logWarn(i + 1, 'target not found by navigation agent');
-                return { success: false, tabs: i + 1, matchedText: null };
+                return {
+                    success: false,
+                    tabs: i + 1,
+                    matchedText: null,
+                    thought: `Navigation agent did not find target after evaluating focused element ${focused.label || focused.text}`,
+                };
             }
-
         } catch {
             console.error('   Failed to parse nav response:', response.text);
+            return {
+                success: false,
+                tabs: i + 1,
+                matchedText: focused.label || focused.text,
+                thought: 'Failed to parse navigation model response',
+            };
         }
 
         await page.keyboard.press('Tab');
         await page.waitForTimeout(100);
     }
 
-    navLogger.logWarn(maxTabs, 'hit max tab limit without finding target');
-    return { success: false, tabs: maxTabs, matchedText: null, confirmedValue: null };
+    return {
+        success: false,
+        tabs: maxTabs,
+        matchedText: null,
+        thought: 'Reached the maximum tab attempts without finding the target',
+    };
 }

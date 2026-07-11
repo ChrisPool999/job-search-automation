@@ -1,7 +1,7 @@
 import "dotenv/config"
 import fs from 'fs';
 import path from 'path';
-import { chromium } from 'playwright';
+import { firefox } from 'playwright';
 import { pathToFileURL } from 'url';
 import { getDirectorDecision } from './vision-director.js';
 import { navigateToTarget } from './navigation-agent.js';
@@ -35,6 +35,17 @@ function normalizeEnvValue(value) {
         .replace(/,$/, '')
         .trim();
 }
+
+function getEnvValue(name) {
+    return normalizeEnvValue(process.env[name] || '');
+}
+
+const ENV_CREDENTIALS = {
+    email: getEnvValue('EMAIL'),
+    password: getEnvValue('PASSWORD'),
+};
+
+const HAS_ENV_CREDENTIALS = Boolean(ENV_CREDENTIALS.email && ENV_CREDENTIALS.password);
 
 function getConfiguredApiKeys() {
     const requestedSize = Number(normalizeEnvValue(process.env.API_KEY_SIZE || 1));
@@ -73,6 +84,44 @@ let sessionsState = [];
 function isInvalidApiKeyError(err) {
     const message = String(err?.message || err?.status || '');
     return message.includes('API key not valid') || message.includes('INVALID_ARGUMENT') || message.includes('API_KEY_INVALID');
+}
+
+function appendUiAction(session, message) {
+    session.ui.events = [
+        ...(session.ui.events || []),
+        { timestamp: new Date().toISOString(), message },
+    ].slice(-20);
+}
+
+function shortText(text, maxLength = 18) {
+    if (!text) return 'unknown';
+    const cleaned = String(text).replace(/\s+/g, ' ').trim();
+    return cleaned.length <= maxLength ? cleaned : `${cleaned.slice(0, maxLength - 1)}…`;
+}
+
+function getShortTaskName(entry) {
+    if (!entry) return 'unknown task';
+    const target = shortText(entry.targetText || entry.description || 'unknown');
+    switch (entry.targetType) {
+        case 'input': return `type ${target}`;
+        case 'button': return `click ${target}`;
+        case 'link': return `click ${target}`;
+        case 'done': return 'finish';
+        default: return target;
+    }
+}
+
+function buildRecentTaskHistory(history) {
+    const recent = history.slice(-10);
+    if (!recent.length) {
+        return 'No previous tasks.';
+    }
+    return recent.map((entry, index) => {
+        const task = getShortTaskName(entry);
+        const result = entry.result ? ` => ${shortText(entry.result, 24)}` : '';
+        const navLabel = entry.navAction ? ` [nav:${shortText(entry.navAction, 24)}]` : '';
+        return `${index + 1}. ${task}${result}${navLabel}`;
+    }).join('\n');
 }
 
 async function prepareDebugDir() {
@@ -139,6 +188,7 @@ async function logAction(step, decision, navResult, tabLabel = 'tab-1') {
         navSuccess: navResult?.success ?? null,
         tabsTaken: navResult?.tabs ?? null,
         matchedText: navResult?.matchedText ?? null,
+        navThought: navResult?.thought ?? null,
         timestamp: new Date().toISOString(),
     });
     await fs.promises.writeFile(ACTION_LOG_PATH, JSON.stringify(debugActions, null, 2));
@@ -161,8 +211,15 @@ async function createTabSession(context, tabIndex, url, apiKey) {
             status: 'starting',
             summary: 'initializing',
             attention: false,
+            paused: false,
             pendingInstruction: null,
             killed: false,
+            resolved: false,
+            currentThought: null,
+            visionThought: null,
+            navThought: null,
+            agentName: null,
+            completedLabel: null,
             events: [],
         },
     };
@@ -185,11 +242,19 @@ async function runTabSession(session) {
 
     session.ui.status = 'working';
     session.ui.summary = 'starting automation';
-    session.ui.events.push({ timestamp: new Date().toISOString(), message: 'automation started' });
+    session.ui.currentThought = 'Beginning automation and analyzing the first page.';
+    appendUiAction(session, 'Automation started');
 
     while (steps < RUN_CONFIG.maxSteps) {
-        if (session.ui.killed) {
+        if (session.ui.killed || session.ui.status === 'done' || session.ui.resolved) {
             break;
+        }
+
+        if (session.ui.paused) {
+            session.ui.status = 'paused';
+            session.ui.summary = 'paused by operator';
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            continue;
         }
 
         if (session.ui.attention) {
@@ -249,13 +314,27 @@ async function runTabSession(session) {
             description: decision.description,
         });
 
+        session.ui.visionThought = decision.description || `Director selected ${decision.targetText}`;
+        session.ui.currentThought = session.ui.visionThought;
+        appendUiAction(session, `Director thought: ${session.ui.visionThought}`);
         await saveStepScreenshot(session.page, currentStep, `${session.label}-director`);
 
         if (decision.targetType === 'done' || decision.pageState === 'summary') {
+            const finalName = decision.finalName?.trim();
+            if (finalName) {
+                session.ui.agentName = finalName;
+                session.ui.completedLabel = finalName;
+            } else if (decision.jobUnavailable) {
+                session.ui.agentName = 'job unavailable';
+                session.ui.completedLabel = 'job unavailable';
+            } else {
+                session.ui.completedLabel = 'completed successfully';
+            }
             session.ui.status = 'done';
-            session.ui.summary = 'completed successfully';
-            session.ui.events = [...(session.ui.events || []), { timestamp: new Date().toISOString(), message: 'director requested completion' }].slice(-20);
-            logger.info('director requested completion', { tab: session.label });
+            session.ui.resolved = true;
+            session.ui.summary = session.ui.completedLabel;
+            session.ui.events = [...(session.ui.events || []), { timestamp: new Date().toISOString(), message: `director completed: ${session.ui.completedLabel}` }].slice(-20);
+            logger.info('director requested completion', { tab: session.label, finalName, jobUnavailable: decision.jobUnavailable });
             await logAction(currentStep, decision, null, session.label);
             break;
         }
@@ -268,7 +347,7 @@ async function runTabSession(session) {
             logger.warn('cycle detected; flagging for manual review', { tab: session.label });
             await logAction(currentStep, decision, null, session.label);
             await waitForOperator(session);
-            if (session.ui.killed) {
+            if (session.ui.killed || session.ui.status === 'done' || session.ui.resolved) {
                 break;
             }
             continue;
@@ -285,7 +364,9 @@ async function runTabSession(session) {
 
         session.ui.status = 'navigating';
         session.ui.summary = `targeting ${decision.targetText}`;
-        session.ui.events = [...(session.ui.events || []), { timestamp: new Date().toISOString(), message: `navigating to ${decision.targetText}` }].slice(-20);
+        session.ui.navThought = `Sending target to nav agent for ${decision.targetText}`;
+        session.ui.currentThought = `Vision: ${session.ui.visionThought}; Nav: ${session.ui.navThought}`;
+        appendUiAction(session, session.ui.navThought);
         logger.info('navigation agent starting', { tab: session.label, targetText: decision.targetText, value: decision.value });
         const urlBefore = session.page.url();
 
@@ -302,7 +383,12 @@ async function runTabSession(session) {
 
         session.ui.status = navResult.success ? 'working' : 'waiting';
         session.ui.summary = result;
-        session.ui.events = [...(session.ui.events || []), { timestamp: new Date().toISOString(), message: result }].slice(-20);
+        if (navResult.thought) {
+            session.ui.navThought = navResult.thought;
+            session.ui.currentThought = `Vision: ${session.ui.visionThought}; Nav: ${session.ui.navThought}`;
+            appendUiAction(session, `Nav agent: ${navResult.thought}`);
+        }
+        appendUiAction(session, result);
         logger.info('navigation step completed', { tab: session.label, result, urlBefore, urlAfter });
         await saveStepScreenshot(session.page, currentStep, `${session.label}-after`);
         await logAction(currentStep, decision, { ...navResult, result }, session.label);
@@ -310,8 +396,12 @@ async function runTabSession(session) {
         session.history.push({
             step: currentStep,
             targetText: decision.targetText,
+            targetType: decision.targetType,
+            pageState: decision.pageState,
             result,
             confirmedValue: navResult?.confirmedValue ?? null,
+            thought: session.ui.currentThought,
+            navAction: navResult?.thought ?? null,
         });
 
         steps++;
@@ -346,7 +436,7 @@ export async function runVisionLoop(url = DEFAULT_JOB_URLS[0], tabCount = null) 
     }
 
     logger.info('launching visible browser', { headless: launchOptions.headless, keepBrowserOpen: RUN_CONFIG.keepBrowserOpenForManualReview });
-    const browser = await chromium.launch(launchOptions);
+    const browser = await firefox.launch(launchOptions);
     const context = await browser.newContext({ viewport: VIEWPORT, screen: VIEWPORT });
     const sessions = [];
 

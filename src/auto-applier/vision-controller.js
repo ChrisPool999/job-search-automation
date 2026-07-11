@@ -1,7 +1,8 @@
 import "dotenv/config"
 import fs from 'fs';
 import path from 'path';
-import { firefox } from 'playwright';
+// import { firefox } from 'playwright';
+import { chromium } from 'playwright';
 import { pathToFileURL } from 'url';
 import { getDirectorDecision } from './vision-director.js';
 import { navigateToTarget } from './navigation-agent.js';
@@ -436,7 +437,9 @@ export async function runVisionLoop(url = DEFAULT_JOB_URLS[0], tabCount = null) 
     }
 
     logger.info('launching visible browser', { headless: launchOptions.headless, keepBrowserOpen: RUN_CONFIG.keepBrowserOpenForManualReview });
-    const browser = await firefox.launch(launchOptions);
+    // Chromium currently handles the single-context, multi-tab flow more smoothly here.
+    // If needed, revert to Firefox by replacing chromium.launch with firefox.launch.
+    const browser = await chromium.launch(launchOptions);
     const context = await browser.newContext({ viewport: VIEWPORT, screen: VIEWPORT });
     const sessions = [];
 

@@ -1,20 +1,21 @@
 import "dotenv/config"
 import fs from 'fs';
 import path from 'path';
-// import { firefox } from 'playwright';
 import { chromium } from 'playwright';
 import { pathToFileURL } from 'url';
 import { getDirectorDecision } from './vision-director.js';
 import { navigateToTarget } from './navigation-agent.js';
 import { createStatusLogger } from './status-logger.js';
 import { createCliDashboard } from './cli-dashboard.js';
+import { shouldRequestSelfFix } from './self-fix-utils.js';
 
 const DEFAULT_JOB_URLS = [
-    'https://edel.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_2001/job/22744',
-    'https://jobs.northropgrumman.com/careers/job/1340071751736?code=JB-18020&domain=ngc.com&rx_a=1&rx_c=engineering&rx_ch=jobp4p&rx_group=543974&rx_id=9b3542a3-5123-11f1-b7c0-b77d8310ea10&rx_job=R10233177&rx_medium=cpc&rx_r=none&rx_source=Indeed&rx_ts=20260706T202526Z&rx_vp=cpc&source=JB-18020&utm_audience=prospectivetalentemployees&utm_campaign=ta-general&utm_content=jobfeed&utm_format=cpl&utm_medium=jobboard&utm_source=indeed',
-    'https://www.amazon.jobs/en/jobs/10423349/embedded-software-engineer-ii-connectivity-systems-at-eero?cmpid=DA_INAD200785B',
-    'https://ibegin.tcsapps.com/candidate/jobs/413770J',
-    'https://jobs.siemens.com/en_US/externaljobs/JobDetail/507945?source=Indeed&source=Indeed'
+    // 'https://pcctalentacquisitionportal.tal.net/vx/lang-en-GB/mobile-0/appcentre-1/brand-7/xf-4529f9c669c1/candidate/so/pm/1/pl/3/opp/20465-NC-Programmer-II/en-GB',
+    // 'https://jobs.northropgrumman.com/careers/job/1340071751736?code=JB-18020&domain=ngc.com&rx_a=1&rx_c=engineering&rx_ch=jobp4p&rx_group=543974&rx_id=9b3542a3-5123-11f1-b7c0-b77d8310ea10&rx_job=R10233177&rx_medium=cpc&rx_r=none&rx_source=Indeed&rx_ts=20260706T202526Z&rx_vp=cpc&source=JB-18020&utm_audience=prospectivetalentemployees&utm_campaign=ta-general&utm_content=jobfeed&utm_format=cpl&utm_medium=jobboard&utm_source=indeed',
+    // 'https://www.amazon.jobs/en/jobs/10423349/embedded-software-engineer-ii-connectivity-systems-at-eero?cmpid=DA_INAD200785B',
+    // 'https://ibegin.tcsapps.com/candidate/jobs/413770J',
+    'https://jobs.siemens.com/en_US/externaljobs/JobDetail/507945?source=Indeed&source=Indeed',
+    // 'https://www.governmentjobs.com/careers/solanocounty/jobs/5367966/information-technology-analyst-principal-unified-communications-engineer'
 ];
 const VIEWPORT = { width: 2560, height: 1080 };
 
@@ -88,16 +89,184 @@ function isInvalidApiKeyError(err) {
 }
 
 function appendUiAction(session, message) {
+    const entry = { timestamp: new Date().toISOString(), message };
     session.ui.events = [
         ...(session.ui.events || []),
-        { timestamp: new Date().toISOString(), message },
+        entry,
     ].slice(-20);
+    session.ui.controllerActions = [
+        ...(session.ui.controllerActions || []),
+        entry,
+    ].slice(-100);
+}
+
+function maybeLogSanityCheck(session, decision, currentStep) {
+    const recentHistory = session.history.slice(-4);
+    if (!recentHistory.length) {
+        return false;
+    }
+
+    const recentActions = (session.ui.controllerActions || []).slice(-8).map((entry) => entry.message || '');
+    const repeatedTarget = recentHistory.filter((entry) => entry.targetText && entry.targetText === decision?.targetText).length >= 2;
+    const repeatedUnchanged = recentHistory.filter((entry) => /unchanged|not found|failed|error/i.test(entry.result || '')).length >= 2;
+    const samePageState = new Set(recentHistory.map((entry) => entry.pageState)).size <= 1;
+    const resetSignal = recentActions.some((message) => /self-fix|recovery|reload|reset/i.test(message));
+    const shouldCheck = currentStep % 4 === 0 || Boolean((repeatedTarget && repeatedUnchanged) || (samePageState && repeatedUnchanged) || resetSignal);
+
+    if (shouldCheck) {
+        appendUiAction(session, '[vision] sanity check');
+    }
+    return shouldCheck;
+}
+
+function flagSessionForOperatorReview(session, { summary, message, reason = null, blocked = false, attention = true, status = 'waiting' }) {
+    session.ui.attention = Boolean(attention) && !blocked;
+    session.ui.blocked = Boolean(blocked);
+    session.ui.completedByOperator = false;
+    session.ui.paused = false;
+    session.ui.pendingInstruction = null;
+    session.ui.status = blocked ? 'blocked' : status;
+    session.ui.summary = summary;
+    session.ui.reviewReason = reason;
+    appendUiAction(session, message);
+}
+
+function resumeSession(session, summary = 'resumed by operator', message = 'resumed by operator') {
+    session.ui.attention = false;
+    session.ui.blocked = false;
+    session.ui.completedByOperator = false;
+    session.ui.paused = false;
+    session.ui.pendingInstruction = null;
+    session.ui.status = 'working';
+    session.ui.summary = summary;
+    appendUiAction(session, message);
 }
 
 function shortText(text, maxLength = 18) {
     if (!text) return 'unknown';
     const cleaned = String(text).replace(/\s+/g, ' ').trim();
     return cleaned.length <= maxLength ? cleaned : `${cleaned.slice(0, maxLength - 1)}…`;
+}
+
+function normalizeVerificationText(text) {
+    return String(text || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+}
+
+export function verifyNavAgentResult(session, decision, navResult) {
+    const feedMessages = [...(session.ui?.navFeed || []), ...(navResult?.liveFeed || [])]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+    const explicitAction = ['click', 'enter', 'type', 'interact', 'toggle'].includes(navResult?.actionType);
+    const sawActionInFeed = /clicked|pressed enter|typed|filled|populate|populated|interact|toggled|toggle|checkbox|input/i.test(feedMessages);
+    const targetText = normalizeVerificationText(decision?.targetText);
+    const requestedValue = normalizeVerificationText(decision?.value);
+    const targetMentioned = targetText ? feedMessages.includes(targetText) : true;
+
+    if (!navResult?.success && !explicitAction && !sawActionInFeed) {
+        return { ok: false, reason: 'nav agent reported failure' };
+    }
+
+    if (decision?.targetType === 'input') {
+        const actionLooksRight = /typed|input|filled|populate|populated|interact/i.test(feedMessages);
+        const ok = actionLooksRight && (targetMentioned || requestedValue || /typed|filled|populated/i.test(feedMessages));
+        return {
+            ok,
+            reason: ok
+                ? 'nav feed shows an input-style action for the requested field'
+                : 'nav feed did not clearly show the requested input action',
+        };
+    }
+
+    const actionLooksRight = /clicked|pressed enter|enter|interact|toggled|toggle|checkbox/i.test(feedMessages);
+    const ok = actionLooksRight && (targetMentioned || /control|button|element|checkbox|input/i.test(feedMessages));
+    return {
+        ok,
+        reason: ok
+            ? 'nav feed shows a click/enter-style action for the requested control'
+            : 'nav feed did not clearly show the requested click/enter action',
+    };
+}
+
+async function runFailureFallback(session, currentStep) {
+    const fallbackLabel = 'reading failure fallback';
+    session.ui.activeAgent = 'vision';
+    session.ui.controllerThought = fallbackLabel;
+    session.ui.currentThought = fallbackLabel;
+    session.ui.navThought = null;
+    session.ui.liveNavFocus = null;
+    session.ui.status = 'working';
+    session.ui.summary = fallbackLabel;
+    appendUiAction(session, 'recovery mode');
+
+    const recentHistory = session.history.slice(-6);
+    const previousFailures = recentHistory.filter((entry) => entry.result && /not found|failed|error|unchanged/i.test(entry.result));
+
+    const fallbackSteps = [
+        {
+            title: 'analyze recent nav history and tabs',
+            run: async () => {
+                appendUiAction(session, 'recovery mode');
+            },
+        },
+        {
+            title: 'retry the latest navigation action from the current state',
+            run: async () => {
+                const lastEntry = session.history.at(-1);
+                if (!lastEntry?.targetText) {
+                    appendUiAction(session, 'recovery mode');
+                    return false;
+                }
+
+                const retryLabel = lastEntry.targetText;
+                session.ui.navThought = `Retrying ${retryLabel}`;
+                session.ui.currentThought = `${fallbackLabel}: retrying ${retryLabel}`;
+                appendUiAction(session, 'recovery mode');
+
+                const navResult = await navigateToTarget(session.page, lastEntry.targetText, lastEntry.inputValue || null, 50, logger, session.apiKey, (message) => {
+                    session.ui.activeAgent = 'nav';
+                    session.ui.liveNavFocus = message;
+                    session.ui.navFeed = [...(session.ui.navFeed || []), message].slice(-12);
+                    session.ui.controllerThought = `${fallbackLabel}: ${message}`;
+                    session.ui.currentThought = session.ui.controllerThought;
+                });
+
+                await session.page.waitForTimeout(RUN_CONFIG.postClickDelayMs);
+                await ensurePageReady(session.page);
+                const retrySucceeded = Boolean(navResult?.success);
+                appendUiAction(session, 'recovery mode');
+                return retrySucceeded;
+            },
+        },
+        {
+            title: 'refresh and re-check the page for latency or stale state',
+            run: async () => {
+                appendUiAction(session, 'recovery mode');
+                await session.page.waitForTimeout(1500);
+                await session.page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
+                await ensurePageReady(session.page);
+                await saveStepScreenshot(session.page, currentStep, `${session.label}-fallback`);
+                appendUiAction(session, 'recovery mode');
+                return true;
+            },
+        },
+    ];
+
+    let didSomethingUseful = false;
+    for (const step of fallbackSteps) {
+        const stepResult = await step.run();
+        if (stepResult) {
+            didSomethingUseful = true;
+        }
+    }
+
+    session.ui.status = 'working';
+    session.ui.summary = didSomethingUseful ? 'fallback completed; re-checking page' : 'fallback completed; awaiting operator help';
+    return didSomethingUseful;
 }
 
 function getShortTaskName(entry) {
@@ -120,7 +289,10 @@ function buildRecentTaskHistory(history) {
     return recent.map((entry, index) => {
         const task = getShortTaskName(entry);
         const result = entry.result ? ` => ${shortText(entry.result, 24)}` : '';
-        const navLabel = entry.navAction ? ` [nav:${shortText(entry.navAction, 24)}]` : '';
+        const navParts = [];
+        if (entry.navAction) navParts.push(shortText(entry.navAction, 24));
+        if (entry.navMatched) navParts.push(`match:${shortText(entry.navMatched, 24)}`);
+        const navLabel = navParts.length ? ` [nav:${navParts.join(',')}]` : '';
         return `${index + 1}. ${task}${result}${navLabel}`;
     }).join('\n');
 }
@@ -145,11 +317,41 @@ async function ensurePageReady(page) {
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 }
 
-async function getDirectorDecisionWithRetry(page, history, apiKey = null, operatorInstruction = null) {
+async function applySelfFix(session, decision, history, currentStep) {
+    const reason = decision?.description || 'stalled page state';
+    const selfFixCount = Number(session.ui?.selfFixCount || 0);
+    if (!shouldRequestSelfFix(decision, history, selfFixCount)) {
+        return false;
+    }
+
+    session.ui.selfFixCount = selfFixCount + 1;
+    session.ui.activeAgent = 'vision';
+    session.ui.controllerThought = `Self-fixing stalled state: ${reason}`;
+    session.ui.currentThought = session.ui.controllerThought;
+    session.ui.navThought = null;
+    session.ui.liveNavFocus = null;
+    session.ui.status = 'working';
+    session.ui.summary = 'self-fixing stalled state';
+    appendUiAction(session, `Self-fix: waiting and re-checking page state`);
+
+    try {
+        await session.page.waitForTimeout(2500);
+        await session.page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
+        await ensurePageReady(session.page);
+        await saveStepScreenshot(session.page, currentStep, `${session.label}-selffix`);
+        logger.info('applied self-fix wait/reload', { tab: session.label, step: currentStep, reason });
+        return true;
+    } catch (error) {
+        logger.warn('self-fix wait/reload failed', { tab: session.label, error: error.message });
+        return false;
+    }
+}
+
+async function getDirectorDecisionWithRetry(page, history, tabLabel = 'tab-1', apiKey = null, operatorInstruction = null) {
     let lastDecision = null;
 
     for (let attempt = 1; attempt <= RUN_CONFIG.directorRetryAttempts; attempt++) {
-        const decision = await getDirectorDecision(page, history, apiKey, operatorInstruction);
+        const decision = await getDirectorDecision(page, history, tabLabel, apiKey, operatorInstruction);
         lastDecision = decision;
 
         const description = `${decision.description || ''} ${decision.pageState || ''}`.toLowerCase();
@@ -190,6 +392,8 @@ async function logAction(step, decision, navResult, tabLabel = 'tab-1') {
         tabsTaken: navResult?.tabs ?? null,
         matchedText: navResult?.matchedText ?? null,
         navThought: navResult?.thought ?? null,
+        navActionType: navResult?.actionType ?? null,
+        focusedElement: navResult?.focused ?? null,
         timestamp: new Date().toISOString(),
     });
     await fs.promises.writeFile(ACTION_LOG_PATH, JSON.stringify(debugActions, null, 2));
@@ -216,23 +420,42 @@ async function createTabSession(context, tabIndex, url, apiKey) {
             pendingInstruction: null,
             killed: false,
             resolved: false,
+            blocked: false,
+            completedByOperator: false,
+            reviewReason: null,
+            selfFixCount: 0,
             currentThought: null,
+            controllerThought: null,
             visionThought: null,
             navThought: null,
+            activeAgent: 'vision',
+            liveNavFocus: null,
+            navFeed: [],
+            navTrace: [],
             agentName: null,
             completedLabel: null,
             events: [],
+            controllerActions: [],
+            navTabAccumulator: 0,
         },
     };
 }
 
 async function waitForOperator(session) {
-    while (session?.ui?.attention && !session?.ui?.killed) {
-        session.ui.status = 'waiting';
-        session.ui.summary = session.ui.pendingInstruction ? `awaiting operator: ${session.ui.pendingInstruction}` : 'waiting for operator';
+    while (!session?.ui?.killed && (session?.ui?.attention || session?.ui?.blocked || session?.ui?.completedByOperator)) {
+        if (session.ui.blocked) {
+            session.ui.status = 'blocked';
+            session.ui.summary = 'blocked by operator';
+        } else if (session.ui.completedByOperator) {
+            session.ui.status = 'done';
+            session.ui.summary = 'marked done by operator';
+        } else {
+            session.ui.status = 'waiting';
+            session.ui.summary = session.ui.pendingInstruction ? `awaiting operator: ${session.ui.pendingInstruction}` : 'waiting for operator';
+        }
         session.ui.events = [
             ...(session.ui.events || []),
-            { timestamp: new Date().toISOString(), message: 'waiting for operator instruction' },
+            { timestamp: new Date().toISOString(), message: 'waiting for operator action' },
         ].slice(-20);
         await new Promise((resolve) => setTimeout(resolve, 500));
     }
@@ -243,12 +466,22 @@ async function runTabSession(session) {
 
     session.ui.status = 'working';
     session.ui.summary = 'starting automation';
-    session.ui.currentThought = 'Beginning automation and analyzing the first page.';
+    session.ui.activeAgent = 'vision';
+    session.ui.controllerThought = 'Beginning automation and analyzing the first page.';
+    session.ui.currentThought = session.ui.controllerThought;
     appendUiAction(session, 'Automation started');
 
     while (steps < RUN_CONFIG.maxSteps) {
-        if (session.ui.killed || session.ui.status === 'done' || session.ui.resolved) {
+        if (session.ui.killed) {
             break;
+        }
+
+        if (session.ui.completedByOperator || session.ui.blocked) {
+            await waitForOperator(session);
+            if (session.ui.killed) {
+                break;
+            }
+            continue;
         }
 
         if (session.ui.paused) {
@@ -258,21 +491,30 @@ async function runTabSession(session) {
             continue;
         }
 
+        const currentStep = steps + 1;
+
         if (session.ui.attention) {
+            const fallbackUsed = await runFailureFallback(session, currentStep);
+            if (session.ui.killed) {
+                break;
+            }
+            if (fallbackUsed) {
+                session.ui.attention = false;
+                session.ui.status = 'working';
+                session.ui.summary = 'fallback completed; resuming automation';
+                appendUiAction(session, 'Fallback completed; resuming automation');
+                continue;
+            }
             await waitForOperator(session);
             if (session.ui.killed) {
                 break;
             }
-            session.ui.attention = false;
-            session.ui.status = 'working';
-            session.ui.summary = session.ui.pendingInstruction ? `resumed with: ${session.ui.pendingInstruction}` : 'resumed by operator';
-            session.ui.events = [
-                ...(session.ui.events || []),
-                { timestamp: new Date().toISOString(), message: 'resumed by operator' },
-            ].slice(-20);
+            resumeSession(
+                session,
+                session.ui.pendingInstruction ? `resumed with: ${session.ui.pendingInstruction}` : 'resumed by operator',
+                'resumed by operator',
+            );
         }
-
-        const currentStep = steps + 1;
         session.ui.status = 'working';
         session.ui.summary = `step ${currentStep}/${RUN_CONFIG.maxSteps} in progress`;
         session.ui.events = [...(session.ui.events || []), { timestamp: new Date().toISOString(), message: `step ${currentStep}/${RUN_CONFIG.maxSteps} started` }].slice(-20);
@@ -287,23 +529,37 @@ async function runTabSession(session) {
 
         let decision;
         try {
-            decision = await getDirectorDecisionWithRetry(session.page, session.history.slice(-5), session.apiKey, operatorInstruction);
+            decision = await getDirectorDecisionWithRetry(session.page, session.history.slice(-10), session.label, session.apiKey, operatorInstruction);
         } catch (err) {
             if (isInvalidApiKeyError(err)) {
-                session.ui.status = 'waiting';
-                session.ui.summary = 'invalid API key';
-                session.ui.attention = true;
-                session.ui.events = [...(session.ui.events || []), { timestamp: new Date().toISOString(), message: 'invalid API key encountered' }].slice(-20);
-                logger.error('tab stopped due to invalid API key', { tab: session.label, message: err.message });
-                break;
+                flagSessionForOperatorReview(session, {
+                    summary: 'invalid API key',
+                    message: 'invalid API key encountered',
+                    reason: 'invalid API key',
+                    attention: true,
+                    status: 'waiting',
+                });
+                logger.error('tab paused for operator review due to invalid API key', { tab: session.label, message: err.message });
+                await waitForOperator(session);
+                if (session.ui.killed) {
+                    break;
+                }
+                continue;
             }
 
-            session.ui.status = 'waiting';
-            session.ui.summary = 'director error';
-            session.ui.attention = true;
-            session.ui.events = [...(session.ui.events || []), { timestamp: new Date().toISOString(), message: `director error: ${err.message}` }].slice(-20);
-            logger.error('tab stopped due to director error', { tab: session.label, message: err.message });
-            break;
+            flagSessionForOperatorReview(session, {
+                summary: 'director error',
+                message: `director error: ${err.message}`,
+                reason: 'director error',
+                attention: true,
+                status: 'waiting',
+            });
+            logger.error('tab paused for operator review due to director error', { tab: session.label, message: err.message });
+            await waitForOperator(session);
+            if (session.ui.killed) {
+                break;
+            }
+            continue;
         }
 
         logger.info('director decision ready', {
@@ -315,9 +571,12 @@ async function runTabSession(session) {
             description: decision.description,
         });
 
+        session.ui.activeAgent = 'vision';
         session.ui.visionThought = decision.description || `Director selected ${decision.targetText}`;
-        session.ui.currentThought = session.ui.visionThought;
-        appendUiAction(session, `Director thought: ${session.ui.visionThought}`);
+        session.ui.controllerThought = session.ui.visionThought;
+        session.ui.currentThought = session.ui.controllerThought;
+        maybeLogSanityCheck(session, decision, currentStep);
+        appendUiAction(session, 'vision controller viewing screenshot');
         await saveStepScreenshot(session.page, currentStep, `${session.label}-director`);
 
         if (decision.targetType === 'done' || decision.pageState === 'summary') {
@@ -331,47 +590,68 @@ async function runTabSession(session) {
             } else {
                 session.ui.completedLabel = 'completed successfully';
             }
-            session.ui.status = 'done';
-            session.ui.resolved = true;
-            session.ui.summary = session.ui.completedLabel;
-            session.ui.events = [...(session.ui.events || []), { timestamp: new Date().toISOString(), message: `director completed: ${session.ui.completedLabel}` }].slice(-20);
-            logger.info('director requested completion', { tab: session.label, finalName, jobUnavailable: decision.jobUnavailable });
+            flagSessionForOperatorReview(session, {
+                summary: 'director reached a completion-like state; awaiting operator review',
+                message: `director reached a completion-like state: ${session.ui.completedLabel}`,
+                reason: 'completion-like state',
+                blocked: Boolean(decision.jobUnavailable || decision.pageState === 'job_unavailable'),
+            });
+            logger.info('director requested review instead of auto-completion', { tab: session.label, finalName, jobUnavailable: decision.jobUnavailable });
             await logAction(currentStep, decision, null, session.label);
-            break;
+            continue;
         }
 
         if (decision.isCycle) {
-            session.ui.status = 'waiting';
-            session.ui.summary = 'cycle detected; manual review needed';
-            session.ui.attention = true;
-            session.ui.events = [...(session.ui.events || []), { timestamp: new Date().toISOString(), message: 'cycle detected' }].slice(-20);
+            flagSessionForOperatorReview(session, {
+                summary: 'cycle detected; manual review needed',
+                message: 'cycle detected',
+                reason: 'cycle detected',
+            });
             logger.warn('cycle detected; flagging for manual review', { tab: session.label });
             await logAction(currentStep, decision, null, session.label);
             await waitForOperator(session);
-            if (session.ui.killed || session.ui.status === 'done' || session.ui.resolved) {
+            if (session.ui.killed) {
                 break;
             }
             continue;
         }
 
         if (!decision.targetText) {
-            session.ui.status = 'waiting';
-            session.ui.summary = 'no target identified; waiting';
-            session.ui.events = [...(session.ui.events || []), { timestamp: new Date().toISOString(), message: 'no target identified' }].slice(-20);
-            logger.warn('no target identified; skipping step', { tab: session.label });
-            steps++;
+            flagSessionForOperatorReview(session, {
+                summary: 'no target identified; awaiting operator review',
+                message: 'no target identified',
+                reason: 'no target identified',
+            });
+            logger.warn('no target identified; awaiting operator review', { tab: session.label });
+            continue;
+        }
+
+        const selfFixApplied = await applySelfFix(session, decision, session.history.slice(-10), currentStep);
+        if (selfFixApplied) {
+            session.ui.summary = 'self-fix applied; re-checking page';
+            appendUiAction(session, '[vision] self-fix');
             continue;
         }
 
         session.ui.status = 'navigating';
         session.ui.summary = `targeting ${decision.targetText}`;
-        session.ui.navThought = `Sending target to nav agent for ${decision.targetText}`;
-        session.ui.currentThought = `Vision: ${session.ui.visionThought}; Nav: ${session.ui.navThought}`;
-        appendUiAction(session, session.ui.navThought);
+        session.ui.activeAgent = 'nav';
+        session.ui.controllerThought = `Seeing ${session.ui.visionThought}; sending nav agent to confirm ${decision.targetText}`;
+        appendUiAction(session, decision.targetType === 'input' ? '[vision] filling input' : '[vision] locating apply');
+        session.ui.navThought = `Searching for ${decision.targetText}`;
+        session.ui.navFeed = [];
+        session.ui.liveNavFocus = null;
+        session.ui.currentThought = session.ui.controllerThought;
         logger.info('navigation agent starting', { tab: session.label, targetText: decision.targetText, value: decision.value });
         const urlBefore = session.page.url();
 
-        const navResult = await navigateToTarget(session.page, decision.targetText, decision.value, 50, logger, session.apiKey);
+        const navResult = await navigateToTarget(session.page, decision.targetText, decision.value, 50, logger, session.apiKey, (message) => {
+            session.ui.activeAgent = 'nav';
+            session.ui.liveNavFocus = message;
+            session.ui.navFeed = [...(session.ui.navFeed || []), message].slice(-12);
+            session.ui.controllerThought = `Nav agent is tabbing through the page: ${message}`;
+            session.ui.currentThought = session.ui.controllerThought;
+        });
 
         await session.page.waitForTimeout(RUN_CONFIG.postClickDelayMs);
         await ensurePageReady(session.page);
@@ -382,14 +662,45 @@ async function runTabSession(session) {
             ? pageChanged ? 'clicked — page navigated' : 'clicked — page unchanged'
             : 'target not found';
 
+        const navVerification = verifyNavAgentResult(session, decision, navResult);
+        const navReviewState = navResult?.reviewState;
+        if (!navVerification.ok || navReviewState?.suspicious) {
+            session.ui.status = 'waiting';
+            session.ui.summary = navReviewState?.suspicious
+                ? 'nav review flagged suspicious navigation; awaiting operator review'
+                : 'nav verification failed; awaiting operator review';
+            session.ui.attention = true;
+            session.ui.reviewReason = navReviewState?.suspicious
+                ? 'nav review flagged suspicious navigation'
+                : 'nav verification failed';
+            session.ui.activeAgent = 'vision';
+            session.ui.liveNavFocus = null;
+            session.ui.controllerThought = navReviewState?.suspicious
+                ? `Nav review flagged suspicious behavior for ${decision.targetText}: ${navReviewState.reason}`
+                : `Nav verification failed for ${decision.targetText}: ${navVerification.reason}`;
+            session.ui.currentThought = session.ui.controllerThought;
+            appendUiAction(session, navReviewState?.suspicious ? '[vision] nav review' : '[vision] recovery');
+            logger.warn('navigation verification flagged', { tab: session.label, targetText: decision.targetText, navVerification: navVerification.reason, navReviewState: navReviewState?.reason });
+            await waitForOperator(session);
+            if (session.ui.killed) {
+                break;
+            }
+            continue;
+        }
+
         session.ui.status = navResult.success ? 'working' : 'waiting';
         session.ui.summary = result;
+        session.ui.activeAgent = 'vision';
+        session.ui.liveNavFocus = null;
+        session.ui.controllerThought = navResult.success
+            ? `Nav agent completed the search for ${decision.targetText}. Returning to vision controller.`
+            : `Nav agent did not find ${decision.targetText}. Returning to vision controller.`;
+        session.ui.currentThought = session.ui.controllerThought;
         if (navResult.thought) {
             session.ui.navThought = navResult.thought;
             session.ui.currentThought = `Vision: ${session.ui.visionThought}; Nav: ${session.ui.navThought}`;
-            appendUiAction(session, `Nav agent: ${navResult.thought}`);
         }
-        appendUiAction(session, result);
+        appendUiAction(session, navResult.success ? '[nav] target found' : '[nav] target missing');
         logger.info('navigation step completed', { tab: session.label, result, urlBefore, urlAfter });
         await saveStepScreenshot(session.page, currentStep, `${session.label}-after`);
         await logAction(currentStep, decision, { ...navResult, result }, session.label);
@@ -401,17 +712,30 @@ async function runTabSession(session) {
             pageState: decision.pageState,
             result,
             confirmedValue: navResult?.confirmedValue ?? null,
+            inputValue: decision.value || null,
             thought: session.ui.currentThought,
             navAction: navResult?.thought ?? null,
+            navMatched: navResult?.matchedText ?? null,
+            navActionType: navResult?.actionType ?? null,
+            navTabsTaken: navResult?.tabs ?? null,
+            focusedElement: navResult?.focused ?? null,
+            controllerActions: (session.ui.controllerActions || []).slice(-8).map((entry) => entry.message),
+            navTrace: Array.isArray(navResult?.trace) ? navResult.trace.slice(-8) : [],
+            navFeed: Array.isArray(navResult?.liveFeed) ? navResult.liveFeed.slice(-8) : [],
+            pageUrl: session.page.url(),
+            tabLabel: session.label,
+            timestamp: new Date().toISOString(),
         });
 
         steps++;
     }
 
     if (steps >= RUN_CONFIG.maxSteps) {
-        session.ui.status = 'waiting';
-        session.ui.summary = 'reached max steps; manual review recommended';
-        session.ui.attention = true;
+        flagSessionForOperatorReview(session, {
+            summary: 'reached max steps; manual review recommended',
+            message: 'reached max steps',
+            reason: 'max steps reached',
+        });
         logger.warn('reached max steps; manual review recommended', { tab: session.label });
     }
 
@@ -437,8 +761,6 @@ export async function runVisionLoop(url = DEFAULT_JOB_URLS[0], tabCount = null) 
     }
 
     logger.info('launching visible browser', { headless: launchOptions.headless, keepBrowserOpen: RUN_CONFIG.keepBrowserOpenForManualReview });
-    // Chromium currently handles the single-context, multi-tab flow more smoothly here.
-    // If needed, revert to Firefox by replacing chromium.launch with firefox.launch.
     const browser = await chromium.launch(launchOptions);
     const context = await browser.newContext({ viewport: VIEWPORT, screen: VIEWPORT });
     const sessions = [];

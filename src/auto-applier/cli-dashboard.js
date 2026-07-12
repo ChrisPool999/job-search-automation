@@ -33,11 +33,19 @@ function getStatusLabel(session) {
     if (ui.killed) {
         return colorize('KILLED', 'white', { dim: true, strikethrough: true });
     }
+    if (ui.blocked) {
+        return colorize('BLOCKED', 'magenta', { bright: true });
+    }
+    if (ui.completedByOperator) {
+        return colorize('DONE (OP)', 'green', { bright: true });
+    }
     if (ui.attention) {
         return colorize('NEEDS ATTENTION', 'red', { bright: true });
     }
 
     switch (ui.status) {
+        case 'blocked':
+            return colorize('BLOCKED', 'magenta');
         case 'done':
             return colorize('DONE', 'green');
         case 'navigating':
@@ -66,11 +74,62 @@ function truncateText(text, maxLength = 30) {
     return `${text.slice(0, maxLength - 1)}…`;
 }
 
+function extractVisionFromThought(thought) {
+    if (!thought) return '';
+    const idx = thought.indexOf('Nav:');
+    if (idx !== -1) {
+        return thought.slice(0, idx).replace(/^Vision:\s*/i, '').trim();
+    }
+    return thought.replace(/^Vision:\s*/i, '').trim();
+}
+
+function extractNavFromThought(thought) {
+    if (!thought) return '';
+    const idx = thought.indexOf('Nav:');
+    if (idx !== -1) {
+        return thought.slice(idx + 4).trim();
+    }
+    return '';
+}
+
+function getRecentSteps(session, max = 5) {
+    const history = session?.history || [];
+    const recent = history.slice(-max).reverse();
+    return recent.map((h) => {
+        const step = h.step ? `${h.step}. ` : '';
+        const target = h.targetText || h.description || '';
+        const result = h.result ? ` => ${h.result}` : '';
+        return `${step}${truncateText(target, 80)}${result}`;
+    });
+}
+
+function getRecentNavThoughts(session, max = 5) {
+    const history = session?.history || [];
+    const recent = history.slice(-max).reverse();
+    return recent.map((h) => {
+        const byNav = h.navAction || extractNavFromThought(h.thought) || '';
+        const match = h.navMatched ? ` (match: ${truncateText(h.navMatched, 40)})` : '';
+        return byNav ? `${truncateText(byNav, 80)}${match}` : '(none)';
+    });
+}
+
+function getRecentVisionThoughts(session, max = 5) {
+    const history = session?.history || [];
+    const recent = history.slice(-max).reverse();
+    return recent.map((h) => {
+        const v = extractVisionFromThought(h.thought) || session?.ui?.visionThought || '';
+        return v ? truncateText(v, 100) : '(none)';
+    });
+}
+
+let renderSuspended = false;
+
 function promptForInstruction(session, render) {
     if (!session || !process.stdout.isTTY) {
         return;
     }
 
+    renderSuspended = true;
     const promptText = session.ui?.pendingInstruction
         ? 'Update instruction (blank to resume): '
         : 'Operator instruction (optional, press Enter to resume): ';
@@ -86,7 +145,9 @@ function promptForInstruction(session, render) {
         if (process.stdin.isTTY) {
             process.stdin.setRawMode(true);
         }
+        process.stdin.resume();
         process.stdout.write('\x1b[?25l');
+        renderSuspended = false;
 
         const instruction = (answer || '').trim();
         if (instruction) {
@@ -104,82 +165,29 @@ function promptForInstruction(session, render) {
     });
 }
 
-function promptForDevSignal(session, render) {
-    if (!session || !process.stdout.isTTY) {
+
+function resolveAttention(session, render) {
+    if (!session?.ui || !process.stdout.isTTY) {
         return;
     }
 
-    process.stdout.write('\x1b[?25h');
-    if (process.stdin.isTTY) {
-        process.stdin.setRawMode(false);
-    }
-
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    rl.question('Dev signal (blank to cancel): ', (answer) => {
-        rl.close();
-        if (process.stdin.isTTY) {
-            process.stdin.setRawMode(true);
-        }
-        process.stdout.write('\x1b[?25l');
-
-        const signal = (answer || '').trim();
-        if (!signal) {
-            render();
-            return;
-        }
-
-        session.ui.events = [
-            ...(session.ui.events || []),
-            { timestamp: new Date().toISOString(), message: `dev signal: ${signal}` },
-        ].slice(-20);
-
-        session.ui.summary = `dev signal: ${signal}`;
-        if (/manual\s*help|help|assist/i.test(signal)) {
-            session.ui.attention = true;
-            session.ui.status = 'waiting';
-            session.ui.summary = 'manual help requested by dev signal';
-            session.ui.events = [
-                ...(session.ui.events || []),
-                { timestamp: new Date().toISOString(), message: 'manual help flagged by dev signal' },
-            ].slice(-20);
-        }
-
-        render();
-    });
-}
-
-function promptForResolve(session, render) {
-    if (!session || !process.stdout.isTTY) {
+    const canResume = Boolean(session.ui.attention || session.ui.blocked || session.ui.completedByOperator);
+    if (!canResume) {
         return;
     }
 
-    process.stdout.write('\x1b[?25h');
-    if (process.stdin.isTTY) {
-        process.stdin.setRawMode(false);
-    }
-
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    rl.question('Resolution label (blank to mark resolved): ', (answer) => {
-        rl.close();
-        if (process.stdin.isTTY) {
-            process.stdin.setRawMode(true);
-        }
-        process.stdout.write('\x1b[?25l');
-
-        const label = (answer || '').trim();
-        session.ui.attention = false;
-        session.ui.pendingInstruction = null;
-        session.ui.status = 'done';
-        session.ui.resolved = true;
-        session.ui.summary = label || 'resolved by operator';
-        session.ui.completedLabel = session.ui.summary;
-        session.ui.agentName = label || 'resolved by operator';
-        session.ui.events = [
-            ...(session.ui.events || []),
-            { timestamp: new Date().toISOString(), message: `resolved by operator${label ? `: ${label}` : ''}` },
-        ].slice(-20);
-        render();
-    });
+    session.ui.attention = false;
+    session.ui.blocked = false;
+    session.ui.completedByOperator = false;
+    session.ui.pendingInstruction = null;
+    session.ui.paused = false;
+    session.ui.status = 'working';
+    session.ui.summary = 'resumed by operator';
+    session.ui.events = [
+        ...(session.ui.events || []),
+        { timestamp: new Date().toISOString(), message: 'resumed by operator' },
+    ].slice(-20);
+    render();
 }
 
 export function createCliDashboard({ getSessions } = {}) {
@@ -191,7 +199,7 @@ export function createCliDashboard({ getSessions } = {}) {
 
     function render() {
         const sessions = getSessions?.() || [];
-        if (!process.stdout.isTTY || !active) {
+        if (!process.stdout.isTTY || !active || renderSuspended) {
             return;
         }
 
@@ -199,9 +207,9 @@ export function createCliDashboard({ getSessions } = {}) {
         process.stdout.write('\x1b[?25l');
         console.log(colorize('Automation Tab Dashboard', 'cyan', { bright: true }));
         if (detailView) {
-            console.log(colorize('Backspace: back • Enter: go • p: pause/unpause • h: manual help • d: dev signal • r: resolve • q: quit', 'dim'));
+            console.log(colorize('Backspace: back • Enter: go • r: resume • q: quit', 'dim'));
         } else {
-            console.log(colorize('w/s: move • Enter: go • r: resolve • q: quit', 'dim'));
+            console.log(colorize('w/s: move • Enter: go • r: resume • q: quit', 'dim'));
         }
         console.log('');
 
@@ -212,27 +220,46 @@ export function createCliDashboard({ getSessions } = {}) {
 
         if (detailView && sessions[selectedIndex]) {
             const session = sessions[selectedIndex];
-            console.log(colorize(`Tab: ${session.label}`, 'cyan', { bright: true }));
-            console.log(colorize(`URL: ${truncateText(session.url)}`, 'white'));
-            console.log(colorize(`Status: ${session.ui?.status || 'idle'}`, 'white'));
-            console.log(colorize(`Summary: ${getSummary(session)}`, 'white'));
-            console.log(colorize(`Resolved: ${session.ui?.resolved ? 'yes' : 'no'}`, 'white'));
-            console.log(colorize(`Agent name: ${session.ui?.agentName || 'none'}`, 'white'));
-            console.log(colorize(`Completed label: ${session.ui?.completedLabel || 'none'}`, 'white'));
-            console.log(colorize(`Vision thought: ${session.ui?.visionThought || 'none'}`, 'white'));
-            console.log(colorize(`Nav thought: ${session.ui?.navThought || 'none'}`, 'white'));
-            console.log(colorize(`Current thought: ${session.ui?.currentThought || 'none'}`, 'white'));
-            console.log(colorize(`Pending instruction: ${session.ui?.pendingInstruction || 'none'}`, 'white'));
-            console.log(colorize(`Killed: ${session.ui?.killed ? 'yes' : 'no'}`, 'white'));
+            const activeAgent = session.ui?.activeAgent;
+            const isNavActive = activeAgent === 'nav';
+            const isVisionActive = activeAgent === 'vision';
+            const visionLabelColor = isVisionActive ? 'yellow' : 'white';
+            const navLabelColor = isNavActive ? 'yellow' : 'white';
+            const visionLabelStyle = isVisionActive ? { bright: true } : { dim: true };
+            const navLabelStyle = isNavActive ? { bright: true } : { dim: true };
+
+            console.log(`${colorize(`Tab: ${session.label}`, 'cyan', { bright: true })}  ${colorize(`URL: ${truncateText(session.url)}`, 'white')}`);
             console.log('');
-            console.log(colorize('Recent actions:', 'yellow'));
-            const events = session.ui?.events || [];
-            if (!events.length) {
-                console.log('No actions recorded yet.');
+            console.log(colorize('Vision controller', visionLabelColor, visionLabelStyle));
+            console.log(`  ${colorize(`Thought: ${truncateText(session.ui?.controllerThought || 'none', 140)}`, visionLabelColor, visionLabelStyle)}`);
+            console.log('');
+            console.log(colorize('Nav agent', navLabelColor, navLabelStyle));
+            console.log(`  ${colorize(`Thought: ${truncateText(session.ui?.navThought || 'none', 140)}`, navLabelColor, navLabelStyle)}`);
+            console.log('');
+            console.log(colorize('Navigation feed (live):', 'yellow'));
+            const navFeed = [...(session.ui?.navFeed || [])];
+            const liveNavFocus = session.ui?.liveNavFocus || null;
+            if (liveNavFocus && !navFeed.includes(liveNavFocus)) {
+                navFeed.push(liveNavFocus);
+            }
+            const recentNavFeed = navFeed.slice(-5);
+            if (!recentNavFeed.length) {
+                console.log('Waiting for nav agent focus updates...');
             } else {
-                events.slice(-15).reverse().forEach((event) => {
+                recentNavFeed.forEach((entry, index) => {
+                    const prefix = index === recentNavFeed.length - 1 ? '>' : ' ';
+                    console.log(`${prefix} ${truncateText(entry, 140)}`);
+                });
+            }
+            console.log('');
+            console.log(colorize('Controller actions:', 'yellow'));
+            const controllerActions = session.ui?.controllerActions || session.ui?.stepsCompleted || [];
+            if (!controllerActions.length) {
+                console.log('No controller actions recorded yet.');
+            } else {
+                controllerActions.slice(-8).reverse().forEach((event) => {
                     const when = new Date(event.timestamp).toLocaleTimeString();
-                    console.log(`- [${when}] ${event.message}`);
+                    console.log(`- [${when}] ${truncateText(event.message, 140)}`);
                 });
             }
             console.log('');
@@ -291,42 +318,21 @@ export function createCliDashboard({ getSessions } = {}) {
                 return;
             }
 
-            if (key.name === 'p') {
-                const sessions = getSessions?.() || [];
-                const session = sessions[selectedIndex];
-                if (session?.ui) {
-                    session.ui.paused = !session.ui.paused;
-                    session.ui.status = session.ui.paused ? 'paused' : 'working';
-                    session.ui.summary = session.ui.paused ? 'paused by operator' : 'resumed from pause';
-                    session.ui.events = [
-                        ...(session.ui.events || []),
-                        { timestamp: new Date().toISOString(), message: session.ui.paused ? 'paused by operator' : 'resumed from pause' },
-                    ].slice(-20);
-                }
-                render();
-                return;
-            }
-
             if (key.name === 'h') {
                 const sessions = getSessions?.() || [];
                 const session = sessions[selectedIndex];
                 if (session?.ui) {
                     session.ui.attention = true;
+                    session.ui.blocked = false;
+                    session.ui.completedByOperator = false;
                     session.ui.status = 'waiting';
-                    session.ui.summary = 'manual help requested by dev';
+                    session.ui.summary = 'needs attention';
                     session.ui.events = [
                         ...(session.ui.events || []),
-                        { timestamp: new Date().toISOString(), message: 'manual help flagged by developer' },
+                        { timestamp: new Date().toISOString(), message: 'requested help from operator' },
                     ].slice(-20);
                 }
                 render();
-                return;
-            }
-
-            if (key.name === 'd') {
-                const sessions = getSessions?.() || [];
-                const session = sessions[selectedIndex];
-                promptForDevSignal(session, render);
                 return;
             }
 
@@ -351,7 +357,7 @@ export function createCliDashboard({ getSessions } = {}) {
             if (key.name === 'r') {
                 const sessions = getSessions?.() || [];
                 const session = sessions[selectedIndex];
-                promptForResolve(session, render);
+                resolveAttention(session, render);
                 return;
             }
 
@@ -377,10 +383,28 @@ export function createCliDashboard({ getSessions } = {}) {
             return;
         }
 
+        if (key.name === 'h') {
+            const sessions = getSessions?.() || [];
+            const session = sessions[selectedIndex];
+            if (session?.ui) {
+                session.ui.attention = true;
+                session.ui.blocked = false;
+                session.ui.completedByOperator = false;
+                session.ui.status = 'waiting';
+                session.ui.summary = 'needs attention';
+                session.ui.events = [
+                    ...(session.ui.events || []),
+                    { timestamp: new Date().toISOString(), message: 'requested help from operator' },
+                ].slice(-20);
+            }
+            render();
+            return;
+        }
+
         if (key.name === 'r') {
             const sessions = getSessions?.() || [];
             const session = sessions[selectedIndex];
-            promptForResolve(session, render);
+            resolveAttention(session, render);
             return;
         }
 

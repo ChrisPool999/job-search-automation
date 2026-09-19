@@ -1,4 +1,3 @@
-import { ApifyClient } from 'apify-client';
 import "dotenv/config"
 
 const resume = `
@@ -39,8 +38,6 @@ export const MAX_RPM = 12
 export const COOLDOWN_MS = 65 * 1000
 export const LINK_OPEN_DELAY_MS = 10 * 1000
 
-export const CLIENT = new ApifyClient({token: process.env.APIFY_API_KEY});
-
 const LOCATIONS = {
     SD:     "San Diego, CA",
     LA:     "Los Angeles County, CA",
@@ -56,19 +53,19 @@ export const JOB_OPTIONS = {
             "junior software engineer",
             "junior software developer",
             "associate software developer",
-            // "jr developer",
-            // "entry level software engineer",
-            // "entry level software developer",
-            // "junior full stack developer",
-            // "junior front end developer",
-            // "junior backend developer",
-            // "junior web developer",
-            // "software developer I",
-            // "software engineer I",
-            // "full stack developer I",
-            // "front end developer I",
-            // "backend developer I",
-            // "web developer I",
+            "jr developer",
+            "entry level software engineer",
+            "entry level software developer",
+            "junior full stack developer",
+            "junior front end developer",
+            "junior backend developer",
+            "junior web developer",
+            "software developer I",
+            "software engineer I",
+            "full stack developer I",
+            "front end developer I",
+            "backend developer I",
+            "web developer I",
         ],
         systemPrompt: `
             I'm a new grad (BS Computer Science, Dec 2025) looking for my first full-time software engineering job. I have roughly 9 months of experience in software development.

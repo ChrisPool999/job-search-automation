@@ -1,7 +1,8 @@
-import { JOB_TYPE, LOCATION, JOB, MAX_RPM, COOLDOWN_MS, CLIENT, RESUME_CUTOFF_SCORE } from './config.js';
+import { JOB_TYPE, LOCATION, JOB, MAX_RPM, COOLDOWN_MS, RESUME_CUTOFF_SCORE } from './config.js';
 import fs from 'fs'
 import { exit } from 'process';
 import { GoogleGenAI } from "@google/genai";
+import { ApifyClient } from 'apify-client';
 
 const SEEN_JOBS_FILE = './seen-jobs.json'
 const PERSISTED_SCORE_CUTOFF = 60
@@ -46,13 +47,41 @@ async function retryFunction(fn, ...args) {
     }
 }
 
+function isQuoteError(err) {
+    return err.statusCode === 403 && err.type === "platform-feature-disabled"
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms))
+}
+
 async function getIndeedJobs() {
     let data  = []
     const queries = JOB.returnQueries()
+    const api_key_size = process.env.APIFY_API_KEY_SIZE
+
+    let i = 1
     for (const query of queries) {
-        const run = await CLIENT.actor("MXLpngmVpE8WTESQr").call(query)
-        const { items } = await CLIENT.dataset(run.defaultDatasetId).listItems()
-        data.push(...items)
+        while (i <= api_key_size) {
+            try {
+                const TOKEN = process.env[`APIFY_API_KEY${i}`]
+                const CLIENT = new ApifyClient({token: TOKEN});
+                const run = await CLIENT.actor("MXLpngmVpE8WTESQr").call(query)
+                const { items } = await CLIENT.dataset(run.defaultDatasetId).listItems()
+                data.push(...items)       
+                break 
+            } catch (err) {
+                if (isQuoteError(err)) {
+                    console.log(`API key ${i} / ${api_key_size} exhausted. Switching to next API key.`)
+                    i++
+                } else {
+                    throw err
+                }
+            } 
+        }
+        if (i > api_key_size) {
+            throw new Error("All API keys exhausted. Please update the .env file with a new APIFY_API_KEY and restart the script.")
+        }
     }
     return data
 }

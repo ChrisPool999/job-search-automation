@@ -1,0 +1,5 @@
+- circle between API tokens so dont need to keep count -- and doesnt crash if ran out mid way
+
+- should, optimize, and start using resume tailoring again
+
+- possibly tweak and perfect gemini LLM so dont need to repaste (apply?) into claude  

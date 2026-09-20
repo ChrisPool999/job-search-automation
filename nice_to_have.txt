@@ -1,4 +1,7 @@
 - circle between API tokens so dont need to keep count -- and doesnt crash if ran out mid way
+^^^^ THIS BUT FOR GEMINI 
+
+-- speed up analysis stage by using multiple gemini tokens at once (worker threads + multithreading??)
 
 - should, optimize, and start using resume tailoring again
 

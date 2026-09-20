@@ -50,7 +50,7 @@ export const JOB_OPTIONS = {
     SWE: {
         name: "SWE",
         jobQueries: [
-            "junior software engineer",
+            // "junior software engineer",
             "junior software developer",
             "associate software developer",
             "jr developer",
@@ -61,11 +61,11 @@ export const JOB_OPTIONS = {
             "junior backend developer",
             "junior web developer",
             "software developer I",
-            "software engineer I",
-            "full stack developer I",
-            "front end developer I",
-            "backend developer I",
-            "web developer I",
+            // "software engineer I",
+            // "full stack developer I",
+            // "front end developer I",
+            // "backend developer I",
+            // "web developer I",
         ],
         systemPrompt: `
             I'm a new grad (BS Computer Science, Dec 2025) looking for my first full-time software engineering job. I have roughly 9 months of experience in software development.
@@ -222,7 +222,7 @@ export const JOB_OPTIONS = {
 
 // CONFIG
 
-const buildProfile = (track, location, MAX_ROWS = 4, DAYS_OLD = "1") => {
+const buildProfile = (track, location, MAX_ROWS = 10, DAYS_OLD = "3") => {
     const { name, jobQueries, systemPrompt } = track
 
     return {

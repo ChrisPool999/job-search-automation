@@ -2,7 +2,6 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { chromium } from 'playwright';
-import { exec } from 'child_process';
 import { resumeBody, resumeCSS, buildPrompt } from './config.js';
 import { GoogleGenAI } from "@google/genai";
 import { MAX_RPM, COOLDOWN_MS } from '../job-analyzer/config.js';
@@ -54,7 +53,6 @@ async function tailorBody(html, prompt, jobInfo) {
     config: { responseMimeType: "text/plain" }
   });
 
-  // Respect existing rate limiter cadence
   await sleep(COOLDOWN_MS / MAX_RPM);
 
   return response.text;
@@ -114,21 +112,11 @@ export async function generateResume(job) {
 
     let browser;
     try {
-        // launches a headless Chrome browser in the background
         browser = await chromium.launch()
-        
-        // creates a new browser tab
         const page = await browser.newPage()
         
-        // injects your HTML string into the tab
-        // waitUntil: 'networkidle' waits until there are no more network requests
-        // important if your HTML loads external fonts or stylesheets
         await page.setContent(html, { waitUntil: 'networkidle' })
         
-        // renders the page to a PDF and saves it to disk
-        // format: 'Letter' is standard US 8.5x11 paper
-        // printBackground: true includes background colors/images from your CSS
-        // margin sets the white space around the content
         await page.pdf({
             path: outputPath,
             format: 'Letter',
@@ -148,8 +136,6 @@ export async function generateResume(job) {
         console.error('Failed to generate PDF:', err);
         throw err;
     } finally {
-        // always close the browser even if something throws
-        // otherwise Chrome processes pile up in the background
         if (browser) await browser.close();
     }
 }

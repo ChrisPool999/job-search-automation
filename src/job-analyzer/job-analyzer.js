@@ -38,7 +38,6 @@ async function retryFunction(fn, ...args) {
             return await fn(...args)  
         } catch (err) {
             if (i === 9) {
-                console.log(123)
                 throw err
             }
             await new Promise((resolve) => setTimeout(resolve, 3000))
@@ -136,7 +135,6 @@ async function createAnalysisWorker(data, results, seen, i) {
         if (isGeminiQuoteError(err)) {
             return 
         } 
-        console.log(456)
         throw err
     }
 
